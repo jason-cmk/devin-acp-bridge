@@ -642,8 +642,8 @@ starting a language server. Probe: `spike/plugin-probe/index.ts`, loaded by `spi
 - **Provider from the plugin.** The plugin registers the `devin` provider, the `devin` model template, the live
   model list and `X-Devin-Cwd: ctx.location.directory`. Users then add only the plugin and the `devin` agent.
 - **Restart.** If `/healthz` fails during a refresh, the next `ensureBridge()` starts a new bridge.
-- **Install.** `opencode plugin add github:<owner>/devin-acp-bridge`, then `opencode service restart`. Still to
-  verify: dependency installation and the package entry point for a Git install.
+- **Install.** `opencode plugin add github:<owner>/devin-acp-bridge`, then `opencode service restart`. Verified
+  in §11.17.
 - **Keep the manual mode.** `bun run start` and the static config stay supported for people who do not use the
   OpenCode service.
 
@@ -661,7 +661,7 @@ Test project: `managed-e2e/project-{a,b}` (plugin and agent only, no provider).
 | `kill` the managed bridge | It removed its own state file. |
 | `sandbox/` (plugin with `baseURL` = 7317) | 22 models from the user's manual bridge; no managed bridge started. |
 
-Not verified: `opencode plugin add github:…` (needs a remote) and `npm install` instead of `bun install`.
+`opencode plugin add github:…` and `npm install` instead of `bun install`: verified in §11.17.
 
 ### 11.8 Policy rejects look like user rejects (2026-11-04)
 
@@ -807,6 +807,35 @@ Not verified: `opencode plugin add github:…` (needs a remote) and `npm install
 - Test harness note: background processes started by this agent's shell tool stop when the tool call ends,
   which explains the unexplained e2e bridge exits in §11.9 and §11.10. `/tmp/with-bridge.sh`-style wrappers
   that start and stop the bridge inside one call avoid it.
+
+### 11.17 Git install and npm install (2026-11-05)
+
+Test setup: a throwaway `HOME` kept OpenCode's config and cache and the managed bridge's state away from the
+user's running bridge. Devin's login does not work under a throwaway `HOME` ("Please log in to use Devin"), so
+the billed turns ran the bridge with the real `HOME` in manual mode on port 7318.
+
+- `opencode plugin add github:jason-cmk/devin-acp-bridge` failed: `Plugin package has no server, GUI, or TUI
+  entrypoint`. OpenCode resolves a package's server entry as `<name>/server`, then `<name>` (`main` or
+  `exports["."]`). Fix: `package.json` `exports["./server"]` → `./opencode-plugin/index.ts`. A path plugin
+  (`…/opencode-plugin`) is unaffected: OpenCode resolves `index` in that directory.
+- With the fix, `opencode plugin add git+file://…#install-polish` installed the package with npm into
+  `~/.cache/opencode/npm/git-<slug>-<hash>/<timestamp>/` and added the spec to `plugins` in the global
+  `opencode.json`. Runtime dependencies installed; devDependencies did not. That is correct for
+  `@opencode/plugin`: OpenCode supplies it (and `effect`) to plugins and refuses a copy from the plugin's
+  `node_modules`.
+- Managed mode from the Git install started the bridge from the cached package (`opencode run
+  …/node_modules/devin-acp-bridge/src/server.ts`), and the request reached Devin.
+- Manual mode with the Git-installed plugin and a bridge run from the cached package: 22 `devin/*` models and a
+  `READY` reply.
+- Fresh clone, `npm install` with no Bun on `PATH`, bridge run with OpenCode's Bun: 22 models and an `NPM_OK`
+  reply. `npm audit` reports moderate advisories in `@npmcli/*` under `@opencode/plugin` → `@opencode/util`,
+  a devDependency that does not run.
+- Updates: `opencode plugin update` reports no updates, and a second `plugin add` says "already configured";
+  neither fetches new commits. Deleting the cached `git-<slug>-*` directory makes OpenCode install the latest
+  commit on its next start.
+- Two copies of the plugin at different paths (global config and project config) both load and leave only the
+  config's static `devin/devin` model. The same path in both is loaded once. Documented in README
+  troubleshooting; not fixed.
 
 ## 12. References
 

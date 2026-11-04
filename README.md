@@ -102,6 +102,20 @@ opencode run -m devin/devin "Reply with READY only. Do not use any tools."
 - The bridge keeps running as long as the OpenCode service. `opencode service stop` does not stop it; stop it
   with `kill $(jq .pid ~/.cache/devin-acp-bridge/bridge.json)`.
 
+### Update
+
+- GitHub install: `opencode plugin update` and a second `opencode plugin add` do not fetch new commits of a
+  Git plugin. Delete OpenCode's cached copy instead; OpenCode installs the latest commit on its next start:
+
+  ```bash
+  rm -rf ~/.cache/opencode/npm/git-devin-acp-bridge-*
+  opencode service restart
+  ```
+
+- Clone: `git pull`, then `npm install` if `package.json` changed, then `opencode service restart`.
+
+The plugin then replaces the running bridge with the new build.
+
 ## Run the bridge yourself (optional)
 
 Use this if you do not use OpenCode's service, or want the bridge on a fixed port.
