@@ -29,7 +29,7 @@ hand.
 ### 1. Install
 
 ```bash
-git clone <this repo> ~/src/devin-acp-bridge
+git clone https://github.com/jason-cmk/devin-acp-bridge.git ~/src/devin-acp-bridge
 cd ~/src/devin-acp-bridge
 npm install        # or: bun install
 ```
@@ -83,8 +83,9 @@ opencode run -m devin/devin "Reply with READY only. Do not use any tools."
   directory, and Devin's live model list.
 - It creates the bridge token in `~/.config/devin-acp-bridge/token` and passes it to the provider.
 - Every 5 minutes it checks the bridge, restarts it if it stopped, and refreshes the model list.
-- When the plugin's code changes (for example after `git pull`), it stops the old bridge and starts the new
-  one.
+- When the bridge source in `src/` changes (for example after `git pull`), it stops the old bridge and starts
+  the new one. Changes to the plugin itself (`opencode-plugin/`) take effect after `opencode service restart`.
+- On first load it waits up to 20 seconds for the bridge and its model list before OpenCode continues.
 - The bridge keeps running as long as the OpenCode service. `opencode service stop` does not stop it; stop it
   with `kill $(jq .pid ~/.cache/devin-acp-bridge/bridge.json)`.
 
@@ -138,6 +139,7 @@ Add the `devin` agent from step 2 as well. In this mode the plugin only refreshe
 - File edits as `diff` blocks.
 - Devin's plan at the start of a turn, and again at the end if it changed.
 - Permission decisions, for example `> **Permission** rejected: \`rm -rf build\``.
+- Token usage for each turn, as Devin reports it.
 
 ## Choose a model
 
@@ -201,8 +203,8 @@ Environment variables are read by the bridge. In managed mode it inherits them f
 | `DEVIN_BRIDGE_POLICY` | `~/.config/devin-acp-bridge/policy.json` | Permission policy file. |
 | `DEVIN_BRIDGE_DEBUG` | off | `1` writes all ACP traffic, including prompts and replies, to `~/.cache/devin-acp-bridge/bridge-debug.ndjson`, and plugin debug lines to `opencode-plugin.log`. |
 
-`GET http://127.0.0.1:<port>/healthz` (no token) reports the bridge's PID and build, whether Devin is running and
-how many sessions the bridge holds. In managed mode the port is in `~/.cache/devin-acp-bridge/bridge.json`.
+`GET http://127.0.0.1:<port>/healthz` (no token) reports the bridge's PID and build, whether Devin is running,
+how many sessions the bridge holds and how many turns are running. In managed mode the port is in `~/.cache/devin-acp-bridge/bridge.json`.
 
 ## Security
 
@@ -216,6 +218,7 @@ how many sessions the bridge holds. In managed mode the port is in `~/.cache/dev
 
 | Symptom | Fix |
 | --- | --- |
+| OpenCode is slow to start the first time | Expected: the plugin waits up to 20 seconds while it starts the bridge and reads Devin's model list. Later starts reuse the running bridge. |
 | No `devin/…` models at all | The plugin did not load or could not start the bridge. Check `~/.cache/devin-acp-bridge/opencode-plugin.log` and `bridge.log`, check that `npm install` ran in the repo, then run `opencode service restart`. |
 | Only `devin/devin` in `/models` | The bridge answered but Devin's model list failed. Check `devin auth login`, then `opencode-plugin.log`. |
 | Two `devin` providers, or requests go to the wrong port | You defined a `devin` provider in config and also use managed mode. Remove the provider, or set `baseURL` in the plugin options for manual mode. |
@@ -237,7 +240,8 @@ how many sessions the bridge holds. In managed mode the port is in `~/.cache/dev
 
 ## Development
 
-`bun run typecheck`, `bun test`. To pick up code changes in managed mode, save the files: the plugin replaces
-the bridge on its next refresh, or at once after `opencode service restart`.
-Design, milestones and findings are in [docs/spec.md](docs/spec.md);
-contributor notes, including how to run end-to-end checks on a second port, are in [AGENTS.md](AGENTS.md).
+`bun run typecheck`, `bun test`. To pick up bridge changes (`src/`) in managed mode, save the files: the plugin
+replaces the bridge on its next refresh, or at once after `opencode service restart`. Plugin changes
+(`opencode-plugin/`) need `opencode service restart`.
+Design, milestones and findings are in [docs/spec.md](docs/spec.md); a visual overview is in
+[docs/architecture.html](docs/architecture.html); contributor notes, including how to run end-to-end checks on a second port, are in [AGENTS.md](AGENTS.md).
