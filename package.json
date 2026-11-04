@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./server": "./opencode-plugin/index.ts"
+  },
   "scripts": {
     "start": "bun run src/server.ts",
     "stub": "bun run stub/server.ts",
