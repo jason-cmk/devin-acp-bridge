@@ -1,0 +1,5 @@
+{
+  "rules": [
+    { "command": "touch /tmp/devin-bridge-allow-*", "decision": "allow" }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "devin/devin",
+  "default_agent": "devin",
+  "providers": {
+    "devin": {
+      "name": "Devin (ACP bridge)",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "env": ["DEVIN_BRIDGE_TOKEN"],
+      "headers": {
+        "X-Devin-Cwd": "/Users/Jason.Kang/src/personal/devin-acp-bridge/e2e"
+      },
+      "settings": {
+        "baseURL": "http://127.0.0.1:7318/v1",
+        "chunkTimeout": false
+      },
+      "models": {
+        "devin": {
+          "name": "Devin",
+          "compatibility": { "reasoningField": "reasoning_content" },
+          "limit": { "context": 1000000, "output": 128000 }
+        }
+      }
+    }
+  },
+  "agents": {
+    "devin": {
+      "description": "Send prompts to Devin through the local ACP bridge",
+      "mode": "primary",
+      "permissions": [
+        { "action": "edit", "resource": "*", "effect": "deny" },
+        { "action": "shell", "resource": "*", "effect": "deny" }
+      ]
+    }
+  },
+  "compaction": { "auto": false },
+  "plugins": [
+    { "package": "../opencode-plugin", "options": { "baseURL": "http://127.0.0.1:7318/v1" } }
+  ]
+}

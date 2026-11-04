@@ -1,0 +1,704 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>devin-acp-bridge · Architecture</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-2: #131a24;
+    --panel: #161e2b;
+    --panel-2: #1c2636;
+    --line: #2a3648;
+    --text: #d8dee9;
+    --muted: #8b98ab;
+    --head: #f2f5fa;
+    --oc: #7aa2f7;      /* OpenCode */
+    --br: #e0af68;      /* Bridge */
+    --dv: #9ece6a;      /* Devin */
+    --warn: #f7768e;
+    --violet: #bb9af7;
+    --cyan: #7dcfff;
+    --radius: 14px;
+    --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1200px 600px at 10% -10%, rgba(122,162,247,.12), transparent 60%),
+      radial-gradient(900px 500px at 100% 0%, rgba(224,175,104,.10), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font: 16px/1.65 var(--sans);
+  }
+  .layout { display: grid; grid-template-columns: 250px 1fr; max-width: 1320px; margin: 0 auto; }
+  nav {
+    position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto;
+    padding: 40px 18px 40px 28px; border-right: 1px solid var(--line);
+  }
+  nav .brand { font-weight: 700; color: var(--head); letter-spacing: .2px; margin-bottom: 22px; }
+  nav .brand small { display: block; color: var(--muted); font-weight: 400; font-size: 12px; margin-top: 4px; }
+  nav a {
+    display: block; color: var(--muted); text-decoration: none; font-size: 14px;
+    padding: 6px 10px; border-radius: 8px; border-left: 2px solid transparent;
+  }
+  nav a:hover { color: var(--head); background: var(--panel); border-left-color: var(--br); }
+  main { padding: 48px 56px 120px; min-width: 0; }
+  header.hero { margin-bottom: 56px; }
+  .eyebrow { font: 600 12px/1 var(--mono); letter-spacing: 2px; text-transform: uppercase; color: var(--br); }
+  h1 { font-size: 46px; line-height: 1.1; margin: 14px 0 16px; color: var(--head); letter-spacing: -1px; }
+  h1 .grad {
+    background: linear-gradient(90deg, var(--oc), var(--br) 50%, var(--dv));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .lede { font-size: 19px; color: var(--muted); max-width: 760px; }
+  h2 {
+    font-size: 28px; color: var(--head); margin: 72px 0 10px; letter-spacing: -.4px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  h2 .num {
+    font: 600 13px/1 var(--mono); color: var(--bg); background: var(--br);
+    padding: 6px 8px; border-radius: 6px;
+  }
+  h3 { color: var(--head); font-size: 19px; margin: 32px 0 8px; }
+  p { max-width: 860px; }
+  code {
+    font: 13.5px/1.4 var(--mono); background: var(--panel-2); color: var(--cyan);
+    padding: 2px 6px; border-radius: 5px; border: 1px solid var(--line);
+  }
+  pre {
+    font: 13px/1.6 var(--mono); background: #0a0e14; border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 18px 20px; overflow-x: auto; color: #c0caf5;
+  }
+  pre code { background: none; border: 0; padding: 0; color: inherit; }
+  .card {
+    background: linear-gradient(180deg, var(--panel), var(--bg-2));
+    border: 1px solid var(--line); border-radius: var(--radius); padding: 22px 24px;
+  }
+  .diagram {
+    background: linear-gradient(180deg, #111824, #0c121b);
+    border: 1px solid var(--line); border-radius: 18px; padding: 26px; margin: 22px 0;
+    box-shadow: 0 30px 60px -30px rgba(0,0,0,.6);
+    overflow-x: auto;
+  }
+  .diagram .caption { color: var(--muted); font-size: 13px; margin-top: 12px; text-align: center; }
+  .grid { display: grid; gap: 16px; }
+  .g2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .g3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
+  .pill {
+    display: inline-block; font: 600 11px/1 var(--mono); padding: 5px 8px; border-radius: 999px;
+    border: 1px solid currentColor; letter-spacing: .5px; text-transform: uppercase;
+  }
+  .oc { color: var(--oc); } .br { color: var(--br); } .dv { color: var(--dv); }
+  .warn { color: var(--warn); } .violet { color: var(--violet); }
+  .card h4 { margin: 10px 0 6px; color: var(--head); font-size: 17px; }
+  .card p, .card li { color: var(--muted); font-size: 14.5px; }
+  .card ul { padding-left: 18px; margin: 8px 0 0; }
+  table { width: 100%; border-collapse: separate; border-spacing: 0; margin: 18px 0; font-size: 14.5px; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+  tbody tr:hover td { background: rgba(255,255,255,.02); }
+  .tbl { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .tbl table { margin: 0; }
+  .tbl tr:last-child td { border-bottom: 0; }
+  .callout {
+    border-left: 3px solid var(--br); background: rgba(224,175,104,.07);
+    padding: 14px 18px; border-radius: 0 10px 10px 0; margin: 20px 0; max-width: 860px;
+  }
+  .callout.red { border-color: var(--warn); background: rgba(247,118,142,.07); }
+  .callout.green { border-color: var(--dv); background: rgba(158,206,106,.07); }
+  .callout strong { color: var(--head); }
+  .modmap { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; }
+  .mod {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+    position: relative; overflow: hidden;
+  }
+  .mod::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--c, var(--br)); }
+  .mod .f { font: 600 13px var(--mono); color: var(--head); }
+  .mod .loc { font: 11px var(--mono); color: var(--muted); float: right; }
+  .mod p { margin: 6px 0 0; font-size: 13.5px; color: var(--muted); }
+  .mermaid { display: flex; justify-content: center; }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: stretch; }
+  .split > div { min-width: 0; }
+  .label { font: 600 11px var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+  .md-preview {
+    background: #0a0e14; border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 20px;
+    font-size: 14px; height: 100%;
+  }
+  .md-preview blockquote { margin: 8px 0; padding-left: 12px; border-left: 3px solid var(--line); color: var(--muted); }
+  .md-preview .task { list-style: none; padding-left: 4px; }
+  footer { margin-top: 90px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 20px; }
+  @media (max-width: 1000px) {
+    .layout { grid-template-columns: 1fr; }
+    nav { display: none; }
+    main { padding: 32px 22px; }
+    .g2, .g3, .modmap, .split { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+<nav>
+  <div class="brand">devin-acp-bridge<small>Architecture guide</small></div>
+  <a href="#why">1 · Why it exists</a>
+  <a href="#big-picture">2 · The big picture</a>
+  <a href="#modules">3 · Module map</a>
+  <a href="#turn">4 · Life of a turn</a>
+  <a href="#sessions">5 · Session mapping</a>
+  <a href="#render">6 · Rendering updates</a>
+  <a href="#permissions">7 · Permissions</a>
+  <a href="#models">8 · Model selection</a>
+  <a href="#failure">9 · Cancel &amp; recovery</a>
+  <a href="#security">10 · Security</a>
+  <a href="#reference">11 · Quick reference</a>
+</nav>
+
+<main>
+<header class="hero">
+  <div class="eyebrow">Bun · TypeScript · ACP v1 · OpenAI Chat Completions</div>
+  <h1>Devin's brain, <span class="grad">OpenCode's face.</span></h1>
+  <p class="lede">
+    A small local server that makes Devin look like an ordinary OpenAI model to OpenCode.
+    OpenCode renders the reply. Devin does the work. Neither tool knows the other is there.
+  </p>
+</header>
+
+<!-- 1 -->
+<h2 id="why"><span class="num">01</span>Why it exists</h2>
+<div class="grid g3">
+  <div class="card">
+    <span class="pill warn">Problem</span>
+    <h4>Devin CLI renders poorly</h4>
+    <p>No syntax highlighting in fenced code. Weak headers, lists and emphasis. The terminal is not the cause: OpenCode renders the same markdown well in the same tmux pane.</p>
+  </div>
+  <div class="card">
+    <span class="pill violet">Constraint</span>
+    <h4>OpenCode cannot host ACP</h4>
+    <p><code>devin acp</code> is an ACP <em>agent</em>. OpenCode can be an ACP agent, but not an ACP <em>client</em>. So OpenCode cannot talk to Devin directly.</p>
+  </div>
+  <div class="card">
+    <span class="pill dv">Solution</span>
+    <h4>Translate in the middle</h4>
+    <p>Speak OpenAI to OpenCode on one side and ACP to Devin on the other. No fork of either tool. Only public interfaces and config.</p>
+  </div>
+</div>
+
+<!-- 2 -->
+<h2 id="big-picture"><span class="num">02</span>The big picture</h2>
+<p>Three processes on one machine. The bridge sits between them and owns all of the translation logic.</p>
+
+<div class="diagram">
+<svg viewBox="0 0 1220 470" width="100%" role="img" aria-label="Architecture diagram: OpenCode to bridge to devin acp">
+  <defs>
+    <linearGradient id="gOC" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#1d2a44"/><stop offset="1" stop-color="#141c2e"/></linearGradient>
+    <linearGradient id="gBR" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#2e2618"/><stop offset="1" stop-color="#1a1610"/></linearGradient>
+    <linearGradient id="gDV" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#1f2c19"/><stop offset="1" stop-color="#141c11"/></linearGradient>
+    <marker id="aOC" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#7aa2f7"/></marker>
+    <marker id="aBR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#e0af68"/></marker>
+    <marker id="aDV" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#9ece6a"/></marker>
+    <marker id="aGR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5b6b82"/></marker>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <style>
+    .t { font-family: Inter, -apple-system, sans-serif; fill: #d8dee9; }
+    .m { font-family: "JetBrains Mono", Menlo, monospace; }
+    .h { font-size: 17px; font-weight: 700; fill: #f2f5fa; }
+    .s { font-size: 12px; fill: #8b98ab; }
+    .chip { font-size: 12.5px; fill: #d8dee9; }
+    .flow { stroke-dasharray: 6 6; animation: dash 1.2s linear infinite; }
+    @keyframes dash { to { stroke-dashoffset: -24; } }
+  </style>
+
+  <!-- OpenCode -->
+  <rect x="20" y="40" width="250" height="330" rx="18" fill="url(#gOC)" stroke="#7aa2f7" stroke-opacity=".55"/>
+  <text x="40" y="74" class="t h">OpenCode v2</text>
+  <text x="40" y="94" class="t s">unchanged · config + plugin only</text>
+  <rect x="40" y="114" width="210" height="52" rx="10" fill="#0f1626" stroke="#2a3a5c"/>
+  <text x="56" y="138" class="t chip">TUI</text><text x="56" y="155" class="t s">markdown + syntax highlight</text>
+  <rect x="40" y="178" width="210" height="52" rx="10" fill="#0f1626" stroke="#2a3a5c"/>
+  <text x="56" y="202" class="t chip">Engine</text><text x="56" y="219" class="t s">openai-compatible provider</text>
+  <rect x="40" y="242" width="210" height="52" rx="10" fill="#0f1626" stroke="#2a3a5c"/>
+  <text x="56" y="266" class="t chip">opencode-plugin/</text><text x="56" y="283" class="t s">registers live model list</text>
+  <rect x="40" y="306" width="210" height="46" rx="10" fill="#0f1626" stroke="#2a3a5c" stroke-dasharray="4 4"/>
+  <text x="56" y="327" class="t s m">opencode.jsonc</text><text x="56" y="343" class="t s">baseURL · token · X-Devin-Cwd</text>
+  <line x1="145" y1="166" x2="145" y2="178" stroke="#5b6b82" marker-end="url(#aGR)"/>
+
+  <!-- Bridge -->
+  <g transform="translate(70,0)">
+  <rect x="380" y="20" width="400" height="390" rx="20" fill="url(#gBR)" stroke="#e0af68" stroke-opacity=".7" filter="url(#glow)"/>
+  <text x="402" y="56" class="t h">devin-acp-bridge</text>
+  <text x="402" y="76" class="t s m">Bun.serve · 127.0.0.1:7317</text>
+
+  <rect x="402" y="96"  width="356" height="44" rx="10" fill="#14110b" stroke="#4a3d24"/>
+  <text x="418" y="123" class="t chip m">server.ts</text><text x="525" y="123" class="t s">HTTP/SSE · auth · turn lifecycle</text>
+
+  <rect x="402" y="150" width="172" height="58" rx="10" fill="#14110b" stroke="#4a3d24"/>
+  <text x="418" y="174" class="t chip m">sessions.ts</text><text x="418" y="193" class="t s">OpenCode → Devin map</text>
+  <rect x="586" y="150" width="172" height="58" rx="10" fill="#14110b" stroke="#4a3d24"/>
+  <text x="602" y="174" class="t chip m">render.ts</text><text x="602" y="193" class="t s">ACP update → markdown</text>
+
+  <rect x="402" y="218" width="172" height="58" rx="10" fill="#14110b" stroke="#4a3d24"/>
+  <text x="418" y="242" class="t chip m">permissions.ts</text><text x="418" y="261" class="t s">policy · default reject</text>
+  <rect x="586" y="218" width="172" height="58" rx="10" fill="#14110b" stroke="#4a3d24"/>
+  <text x="602" y="242" class="t chip m">models.ts</text><text x="602" y="261" class="t s">model catalog</text>
+
+  <rect x="402" y="286" width="356" height="44" rx="10" fill="#14110b" stroke="#4a3d24"/>
+  <text x="418" y="313" class="t chip m">devin.ts</text><text x="505" y="313" class="t s">one child process · ACP client connection</text>
+
+  <text x="402" y="358" class="t s m">auth.ts · openai.ts · diff.ts · glob.ts</text>
+  <text x="402" y="378" class="t s">~/.config/devin-acp-bridge/{token, policy.json}</text>
+
+  </g>
+  <!-- Devin -->
+  <g transform="translate(120,0)">
+  <rect x="890" y="80" width="190" height="250" rx="18" fill="url(#gDV)" stroke="#9ece6a" stroke-opacity=".55"/>
+  <text x="910" y="114" class="t h">devin acp</text>
+  <text x="910" y="134" class="t s">one long-lived child</text>
+  <rect x="910" y="152" width="150" height="40" rx="9" fill="#0e140b" stroke="#2c3d22"/>
+  <text x="924" y="177" class="t chip">Devin sessions</text>
+  <rect x="910" y="200" width="150" height="40" rx="9" fill="#0e140b" stroke="#2c3d22"/>
+  <text x="924" y="225" class="t chip">own file/shell tools</text>
+  <rect x="910" y="248" width="150" height="40" rx="9" fill="#0e140b" stroke="#2c3d22"/>
+  <text x="924" y="273" class="t chip">devin auth login</text>
+  <text x="910" y="314" class="t s">works in the project cwd</text>
+
+  </g>
+  <!-- Arrows OC <-> Bridge -->
+  <path d="M270 195 C 350 195, 370 140, 450 140" fill="none" stroke="#7aa2f7" stroke-width="2.2" class="flow" marker-end="url(#aOC)"/>
+  <text x="280" y="126" class="t s m" fill="#7aa2f7" style="font-size:11px">POST /v1/chat/completions</text>
+  <path d="M450 300 C 380 300, 350 155, 270 145" fill="none" stroke="#e0af68" stroke-width="2.2" class="flow" marker-end="url(#aBR)"/>
+  <text x="290" y="320" class="t s m" fill="#e0af68">SSE chunks</text>
+  <text x="290" y="336" class="t s">markdown in delta.content</text>
+  <path d="M270 268 C 350 268, 380 250, 450 250" fill="none" stroke="#7aa2f7" stroke-width="1.6" stroke-opacity=".7" marker-end="url(#aOC)"/>
+  <text x="292" y="285" class="t s m" fill="#7aa2f7">GET /v1/models</text>
+
+  <!-- Arrows Bridge <-> Devin -->
+  <path d="M850 290 C 930 290, 940 190, 1010 190" fill="none" stroke="#e0af68" stroke-width="2.2" class="flow" marker-end="url(#aBR)"/>
+  <text x="864" y="172" class="t s m" fill="#e0af68">session/prompt</text>
+  <path d="M1010 250 C 940 250, 920 320, 850 320" fill="none" stroke="#9ece6a" stroke-width="2.2" class="flow" marker-end="url(#aDV)"/>
+  <text x="862" y="354" class="t s m" fill="#9ece6a">session/update</text>
+  <text x="862" y="370" class="t s m" fill="#9ece6a">request_permission</text>
+
+  <!-- Protocol legend -->
+  <g transform="translate(20,420)">
+    <rect width="1180" height="36" rx="10" fill="#0f141d" stroke="#2a3648"/>
+    <circle cx="22" cy="18" r="5" fill="#7aa2f7"/><text x="34" y="23" class="t s">OpenAI Chat Completions over HTTP + SSE (stateless; full history each request)</text>
+    <circle cx="660" cy="18" r="5" fill="#9ece6a"/><text x="672" y="23" class="t s">ACP v1 · newline-delimited JSON-RPC over stdio (stateful sessions)</text>
+  </g>
+</svg>
+<div class="caption">The bridge speaks two protocols. The core job is to turn a stateless chat API into a stateful agent session, and back.</div>
+</div>
+
+<div class="callout">
+  <strong>Key idea.</strong> OpenCode thinks it talks to a plain chat model. It sends the whole conversation on every request. Devin keeps state in a session. The bridge remembers which OpenCode session maps to which Devin session, and sends Devin only the newest user message.
+</div>
+
+<!-- 3 -->
+<h2 id="modules"><span class="num">03</span>Module map</h2>
+<p>About 1,000 lines of source. Each module has one job. Most logic is pure and unit-tested; only <code>server.ts</code> and <code>devin.ts</code> do I/O.</p>
+<div class="modmap">
+  <div class="mod" style="--c:var(--br)"><span class="loc">227</span><div class="f">server.ts</div><p>HTTP routes, bearer check, title shortcut, session planning, busy lock, SSE stream, cancel on disconnect.</p></div>
+  <div class="mod" style="--c:var(--dv)"><span class="loc">145</span><div class="f">devin.ts</div><p>Spawns one <code>devin acp</code>. Routes <code>session/update</code> to the active turn. Answers permission requests.</p></div>
+  <div class="mod" style="--c:var(--violet)"><span class="loc">238</span><div class="f">render.ts</div><p><code>TurnRenderer</code>: tool lines, shell output, diffs, plans, fence tracking, usage.</p></div>
+  <div class="mod" style="--c:var(--oc)"><span class="loc">63</span><div class="f">sessions.ts</div><p>Session key, create / reuse / replay plan, transcript prompt.</p></div>
+  <div class="mod" style="--c:var(--warn)"><span class="loc">74</span><div class="f">permissions.ts</div><p>Policy file, glob rules, chained-command guard, never <code>allow_always</code>.</p></div>
+  <div class="mod" style="--c:var(--cyan)"><span class="loc">33</span><div class="f">models.ts</div><p>Reads Devin's <code>model</code> config option into a catalog.</p></div>
+  <div class="mod" style="--c:var(--cyan)"><span class="loc">90</span><div class="f">openai.ts</div><p>Request types, title detection, SSE chunk builders, stop-reason map.</p></div>
+  <div class="mod" style="--c:var(--muted)"><span class="loc">125</span><div class="f">auth · diff · glob</div><p>Token file + constant-time compare. Unified diff. <code>*</code>-only glob.</p></div>
+</div>
+<div class="mod" style="--c:var(--oc); margin-top:12px"><span class="loc">99</span><div class="f">opencode-plugin/index.ts</div><p>Runs inside OpenCode. Fetches <code>/v1/models</code> and registers each Devin model with <code>ctx.model.transform</code>, so they appear in <code>/models</code>.</p></div>
+
+<!-- 4 -->
+<h2 id="turn"><span class="num">04</span>Life of a turn</h2>
+<p>What happens between pressing Enter in OpenCode and seeing the reply. Title requests take a shortcut and never reach Devin.</p>
+<div class="diagram">
+<pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant U as You (TUI)
+  participant O as OpenCode engine
+  participant B as Bridge (server.ts)
+  participant S as SessionStore
+  participant D as devin acp
+
+  U->>O: prompt
+  O->>B: POST /v1/chat/completions (full history, stream)
+  B->>B: check Bearer token
+  alt title request ("You name conversations…", no tools)
+    B-->>O: first five words of the first message, [DONE]
+  else main chat
+    B->>S: plan(key, messages)
+    alt first turn or history mismatch
+      B->>D: session/new {cwd}
+      D-->>B: sessionId + configOptions (models)
+    end
+    B->>D: session/set_config_option (only if model changed)
+    B->>D: session/prompt (newest user message or transcript)
+    loop while Devin works
+      D-->>B: session/update (text, thought, tool_call, plan, diff…)
+      B-->>O: SSE chunk (content / reasoning_content)
+      opt Devin needs approval
+        D->>B: session/request_permission
+        B->>B: decide from policy.json
+        B-->>D: allow_once / reject_once
+        B-->>O: "> Permission allowed|rejected: cmd"
+      end
+    end
+    D-->>B: stopReason
+    B-->>O: finish_reason, usage, [DONE]
+  end
+  O-->>U: rendered markdown
+</pre>
+</div>
+
+<!-- 5 -->
+<h2 id="sessions"><span class="num">05</span>Session mapping</h2>
+<p>OpenAI requests are stateless. ACP sessions are not. <code>SessionStore.plan()</code> decides, for each request, whether to reuse a Devin session or to start a new one.</p>
+<div class="grid g2">
+<div class="diagram" style="margin:0">
+<pre class="mermaid">
+flowchart TD
+  R[Incoming chat request] --> K{x-opencode-session<br/>header?}
+  K -- yes --> KEY1[key = header]
+  K -- no --> KEY2[key = sha256 of<br/>first user msg + cwd]
+  KEY1 --> L{Key known?}
+  KEY2 --> L
+  L -- no --> NEW[session/new<br/>send newest user message]
+  L -- yes --> C{user turns ==<br/>stored + 1?}
+  C -- yes --> REUSE[Reuse sessionId<br/>send newest user message]
+  C -- no --> REPLAY[session/new<br/>send transcript of history<br/>+ newest message]
+  classDef ok fill:#1f2c19,stroke:#9ece6a,color:#d8dee9
+  classDef new fill:#2e2618,stroke:#e0af68,color:#d8dee9
+  class REUSE ok
+  class NEW,REPLAY new
+</pre>
+</div>
+<div class="card">
+  <h4>Rules</h4>
+  <ul>
+    <li><strong>Reuse</strong> only when the history grew by exactly one user message.</li>
+    <li><strong>Replay</strong> covers edits, retries, reverts, a bridge restart, and a <code>devin acp</code> crash. Devin gets the earlier turns as a transcript, so it keeps the context.</li>
+    <li><strong>System messages are dropped.</strong> OpenCode's ~80 KB prompt describes tools Devin does not have.</li>
+    <li><strong>The <code>tools</code> array is ignored.</strong> The bridge never emits <code>tool_calls</code>, so OpenCode never runs anything.</li>
+    <li><strong>Working directory</strong> comes from the <code>X-Devin-Cwd</code> header (absolute and existing), else the bridge's own cwd.</li>
+    <li>Sessions live in memory only.</li>
+  </ul>
+</div>
+</div>
+
+<!-- 6 -->
+<h2 id="render"><span class="num">06</span>Rendering ACP updates</h2>
+<p>
+  Everything Devin does becomes <strong>plain markdown text</strong> in <code>delta.content</code>. Thoughts go to
+  <code>delta.reasoning_content</code>, which OpenCode shows as a reasoning block. This is why the reply looks good:
+  OpenCode's own renderer draws it.
+</p>
+<div class="split">
+  <div>
+    <div class="label">ACP updates in</div>
+<pre><code>tool_call      { kind: "read", title: "Read file",
+                 locations: ["/repo/scratch.txt"] }
+tool_call      { kind: "execute", rawInput: "echo ok" }
+tool_call_update { status: "in_progress",
+                 content: "ok", exit_code: 0 }
+tool_call_update { status: "completed" }
+tool_call      { kind: "edit", content: [{ type: "diff",
+                 oldText: "…", newText: "…" }] }
+plan           [{ completed }, { in_progress }, { pending }]
+agent_message_chunk "Done. I changed one line."
+usage_update   { inputTokens, outputTokens }</code></pre>
+  </div>
+  <div>
+    <div class="label">Markdown out (as OpenCode shows it)</div>
+    <div class="md-preview">
+      <strong>Plan</strong>
+      <ul class="task">
+        <li>☑ Read the file</li>
+        <li>☐ <strong>Edit the line</strong> <em>(in progress)</em></li>
+        <li>☐ Verify</li>
+      </ul>
+      <blockquote><strong>Read file</strong> <code>scratch.txt</code></blockquote>
+      <blockquote><strong>Run</strong> <code>echo ok</code></blockquote>
+<pre style="margin:6px 0;padding:8px 12px">ok</pre>
+      <blockquote><strong>Edit file</strong> <code>scratch.txt</code></blockquote>
+<pre style="margin:6px 0;padding:8px 12px"><span style="color:#f7768e">-hello</span>
+<span style="color:#9ece6a">+hello bridge</span></pre>
+      <p style="margin:8px 0 0">Done. I changed one line.</p>
+    </div>
+  </div>
+</div>
+
+<div class="tbl" style="margin-top:22px">
+<table>
+<thead><tr><th>ACP update</th><th>Output</th></tr></thead>
+<tbody>
+<tr><td><code>agent_message_chunk</code></td><td>Text, as is.</td></tr>
+<tr><td><code>agent_thought_chunk</code></td><td><code>reasoning_content</code> → OpenCode reasoning block.</td></tr>
+<tr><td>First <code>tool_call</code> for an ID</td><td>One quote line: <code>&gt; **Run** `cmd`</code> or <code>&gt; **Title** `path`</code> (up to 3 paths, relative to cwd).</td></tr>
+<tr><td>Shell tool finishes</td><td>Latest output, first 20 lines, in a <code>text</code> fence. Non-zero exit adds <code>✗ exited with code N</code>.</td></tr>
+<tr><td>Tool content <code>diff</code></td><td>Unified diff (3 context lines, max 80 lines) in a <code>diff</code> fence. Once per tool call and path.</td></tr>
+<tr><td><code>plan</code></td><td>Task list. First plan at once; final plan at the end if it changed.</td></tr>
+<tr><td><code>usage_update</code></td><td>Hidden. The last top-level one becomes OpenAI <code>usage</code>.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="callout green">
+  <strong>Fence safety.</strong> <code>TurnRenderer</code> tracks whether Devin's own text has an open <code>```</code> fence. Tool lines that arrive mid-fence are queued until the fence closes, so a tool line never lands inside a code block. Blank lines surround every block so the markdown parser keeps them apart.
+</div>
+
+<!-- 7 -->
+<h2 id="permissions"><span class="num">07</span>Permissions</h2>
+<p>The bridge never approves by position. Devin offers <code>switch_bypass</code> as an "allow always" option, so a naive "pick the first option" client could switch Devin into bypass mode.</p>
+<div class="grid g2">
+<div class="diagram" style="margin:0">
+<pre class="mermaid">
+flowchart TD
+  A[Devin tool call] --> DC{Devin's own<br/>config decides?}
+  DC -- allowed/denied --> X[No request reaches bridge]
+  DC -- ask --> P[session/request_permission]
+  P --> POL[Load policy.json<br/>re-read every request]
+  POL --> M{First matching rule}
+  M -- none --> REJ
+  M -- reject --> REJ[reject_once<br/>else reject_always<br/>else cancelled]
+  M -- allow --> CH{"Chained command?<br/>; &amp;amp; #124; &amp;lt; &amp;gt; #96; $( newline"}
+  CH -- yes --> REJ
+  CH -- no --> AO{allow_once<br/>offered?}
+  AO -- no --> REJ
+  AO -- yes --> OK[allow_once]
+  OK --> SHOW[Show decision line in reply]
+  REJ --> SHOW
+  classDef good fill:#1f2c19,stroke:#9ece6a,color:#d8dee9
+  classDef bad fill:#2d1a20,stroke:#f7768e,color:#d8dee9
+  class OK good
+  class REJ bad
+</pre>
+</div>
+<div>
+<div class="label">~/.config/devin-acp-bridge/policy.json</div>
+<pre><code>{
+  "rules": [
+    { "command": "git push*",      "decision": "reject" },
+    { "command": "git *",          "decision": "allow"  },
+    { "rule": "Exec(dotnet)",      "decision": "allow"  }
+  ]
+}</code></pre>
+<div class="tbl">
+<table>
+<thead><tr><th>Field</th><th>Matches</th></tr></thead>
+<tbody>
+<tr><td><code>command</code></td><td><code>_meta["cognition.ai/editableCommand"]</code></td></tr>
+<tr><td><code>rule</code></td><td><code>_meta["cognition.ai/permissionRule"]</code></td></tr>
+<tr><td><code>title</code></td><td><code>toolCall.title</code></td></tr>
+</tbody>
+</table>
+</div>
+<div class="callout red" style="margin-top:12px">
+  <strong>Why the chain guard?</strong> <code>git *</code> also matches <code>git status &amp;&amp; rm -rf ~</code>. Any command with a shell operator is rejected, even when an allow rule matches.
+</div>
+</div>
+</div>
+
+<!-- 8 -->
+<h2 id="models"><span class="num">08</span>Model selection</h2>
+<p>OpenCode never calls <code>/v1/models</code> on an OpenAI-compatible provider. A small OpenCode server plugin fills the gap. Devin reports models only per session, so the bridge reads them from <code>session/new</code>.</p>
+<div class="diagram">
+<pre class="mermaid">
+sequenceDiagram
+  participant P as opencode-plugin
+  participant B as Bridge
+  participant D as devin acp
+  participant O as OpenCode /models
+
+  Note over P: on load (waits up to 15 s), then every refreshMinutes (5)
+  P->>B: GET /v1/models (Bearer token)
+  alt catalog fresh (under 15 min, or from a real session)
+    B-->>P: cached list
+  else stale
+    B->>D: session/new (throwaway)
+    D-->>B: configOptions.model
+    B->>D: session/delete
+    B-->>P: [devin, claude-opus-…, swe-2-high, …]
+  end
+  P->>P: drop ids matching exclude (fusion-*)
+  P->>O: ctx.model.transform → register devin/* models
+  Note over O,B: Later, on a chat request with body.model = "swe-2-high"
+  O->>B: POST /v1/chat/completions
+  B->>D: session/set_config_option {configId: "model"}
+  Note right of D: unknown model → HTTP 400,<br/>new session deleted
+</pre>
+</div>
+<p>The ID <code>devin</code> means "the model this session started with", so you can switch back after trying another one. Each model ID carries its default thought level, for example <code>claude-opus-5-5-medium</code>.</p>
+
+<!-- 9 -->
+<h2 id="failure"><span class="num">09</span>Cancel &amp; recovery</h2>
+<div class="grid g2">
+<div class="diagram" style="margin:0">
+<pre class="mermaid">
+stateDiagram-v2
+  [*] --> Stopped
+  Stopped --> Starting: first request
+  Starting --> Running: initialize ok
+  Running --> Running: sessions / prompts
+  Running --> Stopped: child exits<br/>(clear sessions, models, catalog)
+  Starting --> Stopped: spawn or initialize fails
+  note right of Stopped
+    Next request spawns a new child.
+    Old OpenCode sessions replay
+    their transcript.
+  end note
+</pre>
+</div>
+<div class="grid" style="gap:12px">
+  <div class="card">
+    <span class="pill oc">Esc in OpenCode</span>
+    <p>The HTTP request aborts. The bridge sends <code>session/cancel</code>. The turn ends with <code>_Cancelled._</code> and <code>finish_reason: stop</code>.</p>
+  </div>
+  <div class="card">
+    <span class="pill br">Busy session</span>
+    <p>A second request for a session that is still running waits up to 5 s, then gets HTTP 409.</p>
+  </div>
+  <div class="card">
+    <span class="pill warn">devin acp dies mid-turn</span>
+    <p>Every ACP call races against the child's exit promise. The open turn ends with <em>"The bridge could not complete the Devin turn"</em>. The next prompt starts a new child and replays history.</p>
+  </div>
+</div>
+</div>
+
+<div class="tbl" style="margin-top:22px">
+<table>
+<thead><tr><th>ACP stopReason</th><th>OpenAI finish_reason</th></tr></thead>
+<tbody>
+<tr><td><code>end_turn</code></td><td><code>stop</code></td></tr>
+<tr><td><code>max_tokens</code>, <code>max_turn_requests</code></td><td><code>length</code></td></tr>
+<tr><td><code>refusal</code></td><td><code>content_filter</code></td></tr>
+<tr><td><code>cancelled</code></td><td><code>stop</code> + <code>_Cancelled._</code></td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- 10 -->
+<h2 id="security"><span class="num">10</span>Security</h2>
+<div class="grid g3">
+  <div class="card"><h4>Loopback only</h4><p>Binds to <code>127.0.0.1</code>, hard-coded. No remote access.</p></div>
+  <div class="card"><h4>Bearer token</h4><p>Every <code>/v1/*</code> call needs it. Constant-time compare. Token from <code>DEVIN_BRIDGE_TOKEN</code> or a <code>0600</code> file created once. Never logged.</p></div>
+  <div class="card"><h4>No filesystem access</h4><p>The bridge tells Devin it has no <code>fs</code> or <code>terminal</code> capability. Devin uses its own tools; the bridge touches no files.</p></div>
+  <div class="card"><h4>No Devin credentials</h4><p><code>devin acp</code> uses its own <code>devin auth login</code> store.</p></div>
+  <div class="card"><h4>Quiet logs</h4><p>Prompts and replies are logged only with <code>DEVIN_BRIDGE_DEBUG=1</code>, to <code>bridge-debug.ndjson</code>.</p></div>
+  <div class="card"><h4>Belt and braces</h4><p>The OpenCode <code>devin</code> agent denies edit and shell, in case a tool call ever slips through.</p></div>
+</div>
+
+<!-- 11 -->
+<h2 id="reference"><span class="num">11</span>Quick reference</h2>
+<div class="grid g2">
+<div>
+<div class="label">Endpoints</div>
+<div class="tbl">
+<table>
+<thead><tr><th>Route</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td><code>POST /v1/chat/completions</code></td><td>Run a Devin turn. SSE or buffered.</td></tr>
+<tr><td><code>GET /v1/models</code></td><td>Live model list. 502 if Devin cannot answer.</td></tr>
+<tr><td><code>GET /healthz</code></td><td><code>{status, devin, sessions, busy}</code>. No auth.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="label" style="margin-top:20px">Files</div>
+<div class="tbl">
+<table>
+<tbody>
+<tr><td><code>~/.config/devin-acp-bridge/token</code></td><td>Bearer token</td></tr>
+<tr><td><code>~/.config/devin-acp-bridge/policy.json</code></td><td>Permission rules</td></tr>
+<tr><td><code>~/.cache/devin-acp-bridge/devin-acp.log</code></td><td>Devin stderr</td></tr>
+<tr><td><code>~/.cache/devin-acp-bridge/bridge-debug.ndjson</code></td><td>ACP traffic (debug only)</td></tr>
+<tr><td><code>~/.cache/devin-acp-bridge/opencode-plugin.log</code></td><td>Plugin log</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+<div>
+<div class="label">opencode.jsonc (essentials)</div>
+<pre><code>{
+  "providers": {
+    "devin": {
+      "package": "@opencode/ai/providers/openai-compatible",
+      "headers": { "X-Devin-Cwd": "/abs/project" },
+      "settings": {
+        "baseURL": "http://127.0.0.1:7317/v1",
+        "apiKey": "{file:~/.config/devin-acp-bridge/token}",
+        "chunkTimeout": false
+      },
+      "models": { "devin": {
+        "compatibility": { "reasoningField": "reasoning_content" },
+        "limit": { "context": 1000000, "output": 128000 }
+      } }
+    }
+  },
+  "compaction": { "auto": false },
+  "plugins": ["/abs/devin-acp-bridge/opencode-plugin"]
+}</code></pre>
+</div>
+</div>
+
+<h3>Known trade-offs</h3>
+<div class="tbl">
+<table>
+<tbody>
+<tr><td>Devin's activity is text, not native OpenCode tool cards.</td><td class="muted">A real OpenCode provider package could fix this later.</td></tr>
+<tr><td>OpenCode undo reverts the transcript, not Devin's file edits.</td><td>Use git.</td></tr>
+<tr><td>No interactive approval prompt in the OpenCode UI.</td><td>Use <code>policy.json</code> and Devin's own config.</td></tr>
+<tr><td>Images in prompts are not forwarded.</td><td>Devin supports them; possible follow-up.</td></tr>
+</tbody>
+</table>
+</div>
+
+<footer>
+  Generated from <code>docs/spec.md</code> and <code>src/</code>. The spec is the source of truth; update it first when behaviour changes.
+</footer>
+</main>
+</div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: "base",
+    securityLevel: "strict",
+    fontFamily: "Inter, -apple-system, sans-serif",
+    themeVariables: {
+      darkMode: true,
+      background: "#111824",
+      primaryColor: "#1c2636",
+      primaryTextColor: "#d8dee9",
+      primaryBorderColor: "#3a4a63",
+      lineColor: "#6b7d96",
+      secondaryColor: "#2e2618",
+      tertiaryColor: "#161e2b",
+      noteBkgColor: "#2e2618",
+      noteTextColor: "#e8d4a8",
+      noteBorderColor: "#e0af68",
+      actorBkg: "#1c2636",
+      actorBorder: "#7aa2f7",
+      actorTextColor: "#f2f5fa",
+      signalColor: "#aab6c8",
+      signalTextColor: "#d8dee9",
+      labelBoxBkgColor: "#2e2618",
+      labelBoxBorderColor: "#e0af68",
+      labelTextColor: "#f2f5fa",
+      loopTextColor: "#e0af68",
+      activationBkgColor: "#2e2618",
+      sequenceNumberColor: "#0d1117",
+      edgeLabelBackground: "#161e2b",
+      clusterBkg: "#161e2b",
+      fontSize: "14px"
+    },
+    sequence: { mirrorActors: false, messageAlign: "center" },
+    flowchart: { curve: "basis", htmlLabels: true }
+  });
+</script>
+</body>
+</html>
