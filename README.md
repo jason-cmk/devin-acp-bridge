@@ -17,8 +17,8 @@ public interfaces of both tools, which can change.
 
 - [Devin CLI](https://docs.devin.ai) installed and logged in (`devin auth login`). Tested with 3000.11.234.
 - [OpenCode](https://opencode.ai) v2. Tested with 2.2.5.
-- `npm` or [Bun](https://bun.sh) once, to install dependencies. At runtime the bridge uses the Bun that is built
-  into OpenCode.
+- For a clone install only: `npm` or [Bun](https://bun.sh) once, to install dependencies. At runtime the bridge
+  uses the Bun that is built into OpenCode.
 - macOS or Linux.
 
 ## Set up
@@ -28,6 +28,17 @@ hand.
 
 ### 1. Install
 
+Either let OpenCode install it from GitHub (no clone, no `npm`):
+
+```bash
+opencode plugin add github:jason-cmk/devin-acp-bridge
+```
+
+This installs the package in OpenCode's cache and adds `"github:jason-cmk/devin-acp-bridge"` to `plugins` in
+`~/.config/opencode/opencode.json`. To update later, run `opencode plugin add` again (see "Update" below).
+
+Or clone it, if you want to change the code:
+
 ```bash
 git clone https://github.com/jason-cmk/devin-acp-bridge.git ~/src/devin-acp-bridge
 cd ~/src/devin-acp-bridge
@@ -36,13 +47,15 @@ npm install        # or: bun install
 
 ### 2. Configure OpenCode
 
-Add this to `~/.config/opencode/opencode.jsonc` (every project) or to a project's `opencode.jsonc`. Replace the
-path.
+Add this to `~/.config/opencode/opencode.jsonc` (every project) or to a project's `opencode.jsonc`. With
+`opencode plugin add`, the `plugins` entry is already in the global config; add only the rest. With a clone,
+replace the path. Use one copy of the plugin only: a GitHub install and a clone path both loaded give two
+plugins that fight over the `devin` provider.
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugins": ["/absolute/path/to/devin-acp-bridge/opencode-plugin"],
+  "plugins": ["/absolute/path/to/devin-acp-bridge/opencode-plugin"],   // or "github:jason-cmk/devin-acp-bridge"
   "agents": {
     "devin": {
       "description": "Send prompts to Devin through the local ACP bridge",
@@ -83,8 +96,8 @@ opencode run -m devin/devin "Reply with READY only. Do not use any tools."
   directory, and Devin's live model list.
 - It creates the bridge token in `~/.config/devin-acp-bridge/token` and passes it to the provider.
 - Every 5 minutes it checks the bridge, restarts it if it stopped, and refreshes the model list.
-- When the bridge source in `src/` changes (for example after `git pull`), it stops the old bridge and starts
-  the new one. Changes to the plugin itself (`opencode-plugin/`) take effect after `opencode service restart`.
+- When the bridge source in `src/` changes (after `git pull` or a plugin update), it stops the old bridge and
+  starts the new one. Changes to the plugin itself (`opencode-plugin/`) take effect after `opencode service restart`.
 - On first load it waits up to 20 seconds for the bridge and its model list before OpenCode continues.
 - The bridge keeps running as long as the OpenCode service. `opencode service stop` does not stop it; stop it
   with `kill $(jq .pid ~/.cache/devin-acp-bridge/bridge.json)`.
@@ -172,7 +185,7 @@ Plugin options (use the object form in `plugins`):
 ```jsonc
 "plugins": [
   {
-    "package": "/absolute/path/to/devin-acp-bridge/opencode-plugin",
+    "package": "/absolute/path/to/devin-acp-bridge/opencode-plugin",   // or "github:jason-cmk/devin-acp-bridge"
     "options": {
       "exclude": ["fusion-*"],   // default: hide Devin's fusion combinations
       "refreshMinutes": 5,       // default
@@ -261,8 +274,9 @@ how many sessions the bridge holds, how many turns are running and how many wait
 | Symptom | Fix |
 | --- | --- |
 | OpenCode is slow to start the first time | Expected: the plugin waits up to 20 seconds while it starts the bridge and reads Devin's model list. Later starts reuse the running bridge. |
-| No `devin/…` models at all | The plugin did not load or could not start the bridge. Check `~/.cache/devin-acp-bridge/opencode-plugin.log` and `bridge.log`, check that `npm install` ran in the repo, then run `opencode service restart`. |
+| No `devin/…` models at all | The plugin did not load or could not start the bridge. Check `~/.cache/devin-acp-bridge/opencode-plugin.log` and `bridge.log`, for a clone install check that `npm install` ran in the repo, then run `opencode service restart`. |
 | Only `devin/devin` in `/models` | The bridge answered but Devin's model list failed. Check `devin auth login`, then `opencode-plugin.log`. |
+| Only `devin/devin`, and the plugin is in both the global and the project config with different paths | Two copies of the plugin are loaded. Keep one. |
 | Two `devin` providers, or requests go to the wrong port | You defined a `devin` provider in config and also use managed mode. Remove the provider, or set `baseURL` in the plugin options for manual mode. |
 | OpenCode reports a missing API key or the bridge returns 401 (manual mode) | OpenCode is not sending the bridge token. Use `"apiKey": "{file:~/.config/devin-acp-bridge/token}"` and run `opencode service restart`. If you set `DEVIN_BRIDGE_TOKEN` for the bridge, OpenCode needs the same value. |
 | `Error: Failed to start server. Is port 7317 in use?` (manual mode) | Another bridge is running. Stop it or set `DEVIN_BRIDGE_PORT`. |
