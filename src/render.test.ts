@@ -123,11 +123,11 @@ describe("TurnRenderer", () => {
 
   test("does not repeat a failure that the bridge itself rejected", () => {
     const result = output(new TurnRenderer(cwd), [
-      { kind: "permission", allowed: false, request: { sessionId: "s", toolCall: { toolCallId: "t1", _meta: { "cognition.ai/editableCommand": "rm x" } }, options: [] } },
+      { kind: "permission", allowed: false, reason: "no matching rule", request: { sessionId: "s", toolCall: { toolCallId: "t1", _meta: { "cognition.ai/editableCommand": "rm x" } }, options: [] } },
       update({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Ran rm", kind: "execute", rawInput: { command: "rm x" } }),
       update({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "failed", content: [{ type: "content", content: { type: "text", text: "Tool execution was rejected" } }] }),
     ]);
-    expect(result).toBe("> **Permission** rejected: `rm x`\n\n> **Run** `rm x`\n\n");
+    expect(result).toBe("> **Permission** rejected by bridge policy (no matching rule): `rm x`\n\n> **Run** `rm x`\n\n");
   });
 
   test("reports other failures with the first line of the error", () => {
@@ -157,5 +157,34 @@ describe("TurnRenderer", () => {
       update({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Read file", kind: "read", locations: [{ path: "/etc/hosts" }] }),
     ]);
     expect(result).toBe("> **Read file** `/etc/hosts`\n\n");
+  });
+});
+
+describe("TurnRenderer with tool cards", () => {
+  test("holds a tool back until it finishes, then hands it out as a card instead of markdown", () => {
+    const renderer = new TurnRenderer(cwd, { cards: true });
+    const before = [
+      text("Checking."),
+      update({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Ran git", kind: "execute", rawInput: { command: "git status --short" } }),
+      update({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "in_progress", content: [{ type: "content", content: { type: "text", text: " M src/a.ts" } }], _meta: { terminal_exit: { exit_code: 1 } } }),
+    ].flatMap((event) => renderer.handle(event));
+    expect(before.map((delta) => delta.content).join("")).toBe("Checking.");
+    expect(renderer.takeCard()).toBeUndefined();
+    renderer.handle(update({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed" }));
+    expect(renderer.takeCard()).toEqual({ title: "Run git status --short", output: "M src/a.ts\n\nExit code 1" });
+    expect(renderer.takeCard()).toBeUndefined();
+  });
+
+  test("puts an edit's diff in the card output, with paths relative to the working directory", () => {
+    const renderer = new TurnRenderer(cwd, { cards: true });
+    renderer.handle(update({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Edit file", kind: "edit", locations: [{ path: "/work/app/a.txt" }], content: [{ type: "diff", path: "/work/app/a.txt", oldText: "x\n", newText: "y\n" }] }));
+    renderer.handle(update({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed" }));
+    expect(renderer.takeCard()).toEqual({ title: "Edit file a.txt", output: "a.txt\n@@ -1,1 +1,1 @@\n-x\n+y" });
+  });
+
+  test("renders tools that never finished as markdown at the end of the turn", () => {
+    const renderer = new TurnRenderer(cwd, { cards: true });
+    renderer.handle(update({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Read file", kind: "read" }));
+    expect(renderer.finish().map((delta) => delta.content).join("")).toBe("> **Read file**\n\n");
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { finishReason, isTitleRequest, lastUserText, localTitle, messageText, type ChatRequest } from "./openai";
+import { finishReason, isTitleRequest, lastUserText, localTitle, messageImages, messageText, type ChatRequest } from "./openai";
 
 const titleRequest: ChatRequest = {
   messages: [
@@ -24,6 +24,27 @@ describe("messageText", () => {
 
   test("returns empty text for null content", () => {
     expect(messageText({ role: "assistant", content: null })).toBe("");
+  });
+});
+
+describe("messageImages", () => {
+  test("turns base64 data URLs into ACP image blocks and skips other parts", () => {
+    expect(
+      messageImages({
+        role: "user",
+        content: [
+          { type: "text", text: "look" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,iVBORw0KGgo=" } },
+          { type: "image_url", image_url: { url: "https://example.com/a.png" } },
+          { type: "image_url", image_url: { url: "data:image/png,notbase64" } },
+        ],
+      }),
+    ).toEqual([{ type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" }]);
+  });
+
+  test("returns no images for string content or a missing message", () => {
+    expect(messageImages({ role: "user", content: "hi" })).toEqual([]);
+    expect(messageImages(undefined)).toEqual([]);
   });
 });
 

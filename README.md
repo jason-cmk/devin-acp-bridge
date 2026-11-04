@@ -138,8 +138,22 @@ Add the `devin` agent from step 2 as well. In this mode the plugin only refreshe
 - Shell output (first 20 lines) and non-zero exit codes.
 - File edits as `diff` blocks.
 - Devin's plan at the start of a turn, and again at the end if it changed.
-- Permission decisions, for example `> **Permission** rejected: \`rm -rf build\``.
+- Permission decisions, for example `> **Permission** rejected by bridge policy (reject rule): \`rm -rf build\``
+  or `> **Permission** allowed by you: \`npm test\``. Devin tells its model that "the user" rejected the call,
+  even when the bridge policy rejected it.
 - Token usage for each turn, as Devin reports it.
+- Devin's questions in OpenCode's own question picker. Devin waits for your answer and then continues the same
+  turn. If you type a new message instead, the bridge cancels the question and Devin's turn, then sends your
+  message. The agent must allow OpenCode's `question` tool; otherwise the bridge cancels the question and says
+  so in the reply.
+- Devin's own session title in OpenCode's session list. It arrives a few seconds after your first message.
+- Attached images. Devin sees images on your newest message.
+- Devin's slash commands as `/devin:<name>`, for example `/devin:compact` or `/devin:recap`, and Devin's skills.
+  Set the plugin option `"commands": false` to hide them.
+- Messages you type while Devin works go to the running turn, and Devin reads them at its next step, as in the
+  Devin CLI. Queued messages (OpenCode's queue delivery) still wait until the turn ends.
+- With the plugin option `"toolCards": true` (experimental), each Devin tool call shows as an OpenCode tool
+  card instead of a markdown line.
 
 ## Choose a model
 
@@ -147,8 +161,11 @@ Add the `devin` agent from step 2 as well. In this mode the plugin only refreshe
 list from the bridge when OpenCode starts and every 5 minutes, so new Devin models appear without a config
 change. `devin/devin` means Devin's default model.
 
-Each model runs at the thought level its ID names (`claude-opus-5-5-medium`, `swe-2-high`). You can switch
-models in the middle of a conversation; the next turn uses the new model.
+Each model runs at the thought level its ID names (`claude-opus-5-5-medium`, `swe-2-high`) unless you pick a
+variant: each thought level the model supports is an OpenCode variant, for example
+`-m devin/claude-sonnet-5-5-medium#high` or the variant picker in the TUI. The variants appear about a minute
+after the bridge starts, while it reads the levels from Devin (no billed turn). You can switch models and
+variants in the middle of a conversation; the next turn uses the new choice.
 
 Plugin options (use the object form in `plugins`):
 
@@ -159,7 +176,10 @@ Plugin options (use the object form in `plugins`):
     "options": {
       "exclude": ["fusion-*"],   // default: hide Devin's fusion combinations
       "refreshMinutes": 5,       // default
-      "provider": "devin"        // default provider ID
+      "provider": "devin",       // default provider ID
+      "commands": true,          // default: Devin's slash commands as /devin:<name>
+      "toolCards": false,        // default: true shows Devin's tool calls as OpenCode tool cards (experimental)
+      "debug": false             // default: true runs the managed bridge with DEVIN_BRIDGE_DEBUG=1 (logs prompts)
       // "baseURL": "http://127.0.0.1:7317/v1"  — set only when you run the bridge yourself
     }
   }
@@ -172,8 +192,14 @@ Devin decides first, using its own permission rules (`~/.config/devin/config.jso
 about calls those rules do not cover. In its default mode Devin edits files without asking and asks before
 shell commands and other tools.
 
-The bridge cannot show an approval prompt in OpenCode, so it **rejects every request** unless a policy rule
-allows it. Create `~/.config/devin-acp-bridge/policy.json`:
+The bridge checks its policy file first. When no rule matches, it **asks you** in OpenCode's question picker:
+**Allow once**, **Always allow this command** or **Reject**. The prompt shows the command or paths, Devin's
+rule and why no policy rule allowed it. **Always allow this command** allows this call and adds an `allow`
+rule for that exact command to the policy file; it is offered only for a plain command without `*`. Any other
+answer rejects, and so does dismissing the picker, typing a new message or the timeout. If the agent does not
+allow OpenCode's `question` tool, the bridge rejects at once.
+
+To skip the prompt for commands you trust or never want, create `~/.config/devin-acp-bridge/policy.json`:
 
 ```json
 {
@@ -189,8 +215,23 @@ allows it. Create `~/.config/devin-acp-bridge/policy.json`:
   `title` matches the tool title. Only `*` is special. The first matching rule wins.
 - `allow` approves that one call only. The bridge never chooses Devin's "always allow" or "bypass" options.
 - `allow` never covers a chained command (`;`, `&`, `|`, `<`, `>`, backticks, `$(`, newlines): `git *` does
-  not approve `git status && rm -rf ~`.
+  not approve `git status && rm -rf ~`. The bridge asks you about it instead.
+- `reject` never prompts.
 - The bridge reads the file on every request, so edits apply without a restart.
+
+### Devin mode per OpenCode agent
+
+The plugin tells the bridge which OpenCode agent sent each request. The bridge sets Devin's session mode to
+match before the turn:
+
+| OpenCode agent | Devin mode | Effect |
+| --- | --- | --- |
+| `build` | `bypass` | Devin runs every tool without asking. **The policy file does not apply.** |
+| `plan` | `plan` | Devin's plan mode, for read-only work. Calls that Devin asks about still go through the policy file, then to you. |
+| any other (for example `devin`) | `accept-edits` | Devin's default: edits apply, other tools ask; the policy file decides, then you. |
+
+Switching agents in the middle of a conversation changes the mode for the next turn. Use `build` only in a
+project where you accept that Devin runs shell commands with no check.
 
 ## Configuration
 
@@ -201,10 +242,11 @@ Environment variables are read by the bridge. In managed mode it inherits them f
 | `DEVIN_BRIDGE_PORT` | `7317` (manual), random (managed) | Port on `127.0.0.1`. In manual mode, update `baseURL` to match. |
 | `DEVIN_BRIDGE_TOKEN` | token file | Use this token instead of `~/.config/devin-acp-bridge/token`. OpenCode must send the same value. |
 | `DEVIN_BRIDGE_POLICY` | `~/.config/devin-acp-bridge/policy.json` | Permission policy file. |
+| `DEVIN_BRIDGE_QUESTION_TIMEOUT_MS` | `600000` (10 min) | How long Devin waits for the answer to a question or a permission prompt. After that the bridge cancels the question (or rejects the permission) and the turn. |
 | `DEVIN_BRIDGE_DEBUG` | off | `1` writes all ACP traffic, including prompts and replies, to `~/.cache/devin-acp-bridge/bridge-debug.ndjson`, and plugin debug lines to `opencode-plugin.log`. |
 
 `GET http://127.0.0.1:<port>/healthz` (no token) reports the bridge's PID and build, whether Devin is running,
-how many sessions the bridge holds and how many turns are running. In managed mode the port is in `~/.cache/devin-acp-bridge/bridge.json`.
+how many sessions the bridge holds, how many turns are running and how many wait for an answer to a question. In managed mode the port is in `~/.cache/devin-acp-bridge/bridge.json`.
 
 ## Security
 
@@ -225,17 +267,23 @@ how many sessions the bridge holds and how many turns are running. In managed mo
 | OpenCode reports a missing API key or the bridge returns 401 (manual mode) | OpenCode is not sending the bridge token. Use `"apiKey": "{file:~/.config/devin-acp-bridge/token}"` and run `opencode service restart`. If you set `DEVIN_BRIDGE_TOKEN` for the bridge, OpenCode needs the same value. |
 | `Error: Failed to start server. Is port 7317 in use?` (manual mode) | Another bridge is running. Stop it or set `DEVIN_BRIDGE_PORT`. |
 | Devin reads or edits the wrong directory (manual mode) | Set `X-Devin-Cwd` to the project's absolute path. Managed mode sets it per project. |
-| Every shell command is rejected | Expected without a policy file. Add an `allow` rule, or allow it in Devin's own config. |
+| Every shell command is rejected with no prompt | The agent does not allow OpenCode's `question` tool, or you use `opencode run`, which cannot ask. Allow `question`, add an `allow` rule, or allow it in Devin's own config. |
+| A second permission prompt appears right after the first | Devin asked for two permissions. The bridge asks them one at a time, in order. |
+| `Devin rejected thought_level …` | The variant names a level the model lacks and the bridge did not know the model's levels yet. Pick the model's default variant, or wait a minute and retry. |
+| No `/devin:` commands | The plugin reads them after the models; wait for the next refresh, or check `opencode-plugin.log`. `opencode run "/devin:…"` does not run commands; use the TUI. |
+| `> **Question** cancelled: OpenCode did not offer its question tool.` | The agent denies OpenCode's `question` permission. Allow it for the agent you use with Devin. |
+| Devin's question shows as failed with "User canceled the question" | You dismissed the picker, typed a new message, or the answer timed out (`DEVIN_BRIDGE_QUESTION_TIMEOUT_MS`). `opencode run` cannot ask questions, so it always cancels them. |
 | `_The bridge could not complete the Devin turn: …_` | `devin acp` stopped. The next prompt starts it again and replays the conversation. Details are in `~/.cache/devin-acp-bridge/devin-acp.log`. |
 
 ## Limitations
 
-- Undo and revert in OpenCode change the transcript only, not Devin's file edits. Use git.
-- No approval prompts inside OpenCode; use the policy file.
-- Image attachments are not sent to Devin.
-- Thought levels other than each model's default are not selectable.
-- Editing or retrying a message in OpenCode moves the conversation to a new Devin session with the earlier
-  turns replayed as text.
+- Undo and revert in OpenCode also revert Devin's file edits, because OpenCode snapshots the worktree around
+  each reply. Gitignored files are not in the snapshot.
+- Editing, retrying or reverting a message moves the conversation to a new Devin session with the earlier
+  turns replayed as text. Devin offers no way over ACP to fork or rewind a session.
+- Devin's plan shows as a checklist in the reply, not in a todo panel.
+- Tool cards (`toolCards`) add one OpenCode step per Devin tool call. An agent step limit can end a long turn
+  early.
 - Bridge sessions appear in Devin's own session list.
 
 ## Development

@@ -2,7 +2,7 @@ import type { PlanEntry, ToolCallContent, ToolKind } from "@agentclientprotocol/
 import { isAbsolute, relative } from "node:path";
 import type { TurnEvent } from "./devin";
 import { unifiedDiff } from "./diff";
-import type { Delta } from "./openai";
+import type { Delta, ToolCall } from "./openai";
 import { permissionLabel } from "./permissions";
 
 type ToolState = {
@@ -13,9 +13,22 @@ type ToolState = {
   output?: string;
   exitCode?: number;
   announced: boolean;
+  /** Card mode: markdown held back until the tool finishes, and the diffs for the card output. */
+  held: string[];
+  diffs: string[];
+  finished?: boolean;
 };
 
 export type TurnUsage = { promptTokens: number; completionTokens: number };
+/** A finished Devin tool call, shown with the plugin's `devin_tool` in an OpenCode tool card (§6.16). */
+export type ToolCard = { title: string; output: string };
+/** The plugin registers this tool; its `execute` only returns the card's output (opencode-plugin/index.ts). */
+export const CARD_TOOL = "devin_tool";
+
+export function cardToolCall(callId: string, card: ToolCard): ToolCall {
+  return { id: callId, type: "function", function: { name: CARD_TOOL, arguments: JSON.stringify(card) } };
+}
+const MAX_CARD_LINES = 200;
 
 const FENCE = /^ {0,3}(```|~~~)/;
 const MAX_PATHS = 3;
@@ -34,6 +47,11 @@ function fence(language: string, lines: string[]): string {
   const longestTicks = Math.max(2, ...lines.map((line) => line.match(/`+/g)?.reduce((max, run) => Math.max(max, run.length), 0) ?? 0));
   const ticks = "`".repeat(longestTicks + 1);
   return [`${ticks}${language}`, ...lines, ticks].join("\n");
+}
+
+function clipLines(text: string, limit: number): string {
+  const lines = text.split("\n");
+  return lines.length > limit ? [...lines.slice(0, limit), `… ${lines.length - limit} more lines`].join("\n") : text;
 }
 
 function planBlock(entries: PlanEntry[]): string {
@@ -76,14 +94,30 @@ export class TurnRenderer {
   private trailingNewlines = 2;
   private renderedPlanKey?: string;
   private latestPlan?: PlanEntry[];
+  private readonly cards: ToolCard[] = [];
+  private readonly withCards: boolean;
   usage?: TurnUsage;
 
-  constructor(private readonly cwd: string) {}
+  constructor(private readonly cwd: string, options: { cards?: boolean } = {}) {
+    this.withCards = options.cards ?? false;
+  }
+
+  /** Card mode: the next finished tool call, in the order the tools finished. */
+  takeCard(): ToolCard | undefined {
+    return this.cards.shift();
+  }
+
+  /** A card as markdown, for a response whose request did not offer the card tool. */
+  cardMarkdown(card: ToolCard): Delta[] {
+    return this.block([`> **${card.title}**`, ...(card.output ? [fence("text", card.output.split("\n"))] : [])].join("\n\n"));
+  }
 
   handle(event: TurnEvent): Delta[] {
+    if (event.kind === "question" || event.kind === "permission-ask") return [];
     if (event.kind === "permission") {
       if (!event.allowed) this.rejectedToolCalls.add(event.request.toolCall.toolCallId);
-      const verdict = event.allowed ? "allowed" : "rejected";
+      const verdict = event.byUser ? `${event.allowed ? "allowed" : "rejected"} by you`
+        : event.allowed ? "allowed" : `rejected by bridge policy (${event.reason ?? "no matching rule"})`;
       return this.block(`> **Permission** ${verdict}: ${permissionLabel(event.request)}`);
     }
 
@@ -117,6 +151,7 @@ export class TurnRenderer {
   finish(): Delta[] {
     const deltas: Delta[] = [];
     if (this.inFence) deltas.push(...this.agentText(`${this.partialLine ? "\n" : ""}\`\`\`\n`));
+    for (const state of this.tools.values()) if (!state.finished) this.queue.push(...state.held.splice(0));
     const planKey = this.latestPlan && JSON.stringify(this.latestPlan);
     if (this.latestPlan && planKey !== this.renderedPlanKey) {
       this.renderedPlanKey = planKey;
@@ -148,6 +183,10 @@ export class TurnRenderer {
     const trailing = text.length - text.replace(/\n+$/, "").length;
     this.trailingNewlines = trailing === text.length ? this.trailingNewlines + trailing : trailing;
     return [{ content: text }, ...this.flush()];
+  }
+
+  note(markdown: string): Delta[] {
+    return this.block(markdown);
   }
 
   private block(markdown: string): Delta[] {
@@ -182,7 +221,7 @@ export class TurnRenderer {
     rawInput?: unknown;
     _meta?: Record<string, unknown> | null;
   }): Delta[] {
-    const state = this.tools.get(update.toolCallId) ?? { title: "Tool", paths: [], announced: false };
+    const state = this.tools.get(update.toolCallId) ?? { title: "Tool", paths: [], announced: false, held: [], diffs: [] };
     if (update.title) state.title = update.title;
     if (update.kind) state.kind = update.kind;
     if (update.locations?.length) state.paths = update.locations.map((location) => this.displayPath(location.path));
@@ -204,9 +243,13 @@ export class TurnRenderer {
       if (this.renderedDiffs.has(key)) continue;
       this.renderedDiffs.add(key);
       const hunks = unifiedDiff(item.oldText ?? "", item.newText);
-      if (hunks.length) blocks.push(`${inlineCode(this.displayPath(item.path))}\n\n${fence("diff", hunks)}`);
+      if (hunks.length) {
+        blocks.push(`${inlineCode(this.displayPath(item.path))}\n\n${fence("diff", hunks)}`);
+        state.diffs.push([this.displayPath(item.path), ...hunks].join("\n"));
+      }
     }
     const finished = update.status === "completed" || update.status === "failed";
+    if (this.withCards) return this.holdForCard(update.toolCallId, state, blocks, finished, update.status === "failed" ? contentText(update.content) : "");
     if (finished && state.kind === "execute" && state.output && !this.rejectedToolCalls.has(update.toolCallId)) {
       const output = state.output.split("\n");
       const shown = output.slice(0, MAX_OUTPUT_LINES);
@@ -221,6 +264,33 @@ export class TurnRenderer {
     }
     blocks.forEach((markdown) => this.queue.push(markdown));
     return this.flush();
+  }
+
+  /** Rejected calls stay markdown: the permission line already explains them, and a card would add nothing. */
+  private holdForCard(toolCallId: string, state: ToolState, blocks: string[], finished: boolean, failure: string): Delta[] {
+    state.held.push(...blocks);
+    if (!finished || state.finished) return [];
+    state.finished = true;
+    if (this.rejectedToolCalls.has(toolCallId)) {
+      this.queue.push(...state.held.splice(0));
+      return this.flush();
+    }
+    state.held = [];
+    const parts = [
+      ...(state.kind === "execute" && state.output ? [clipLines(state.output, MAX_CARD_LINES)] : []),
+      ...state.diffs,
+      ...(state.kind === "execute" && state.exitCode ? [`Exit code ${state.exitCode}`] : []),
+      ...(failure && state.kind !== "execute" ? [`Failed: ${failure}`] : []),
+    ];
+    this.cards.push({ title: this.cardTitle(state), output: parts.join("\n\n") });
+    return [];
+  }
+
+  private cardTitle(state: ToolState): string {
+    if (state.kind === "execute" && state.command) return `Run ${state.command.split("\n")[0]}`;
+    const paths = state.paths.slice(0, MAX_PATHS);
+    if (state.paths.length > MAX_PATHS) paths.push(`+${state.paths.length - MAX_PATHS} more`);
+    return [state.title, ...paths].join(" ");
   }
 
   private toolLine(state: ToolState): string {

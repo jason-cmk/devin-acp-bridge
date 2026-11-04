@@ -1,9 +1,22 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import type { PermissionOption, RequestPermissionRequest } from "@agentclientprotocol/sdk";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { decidePermission, loadPolicy, matchRule, permissionLabel, type PolicyRule } from "./permissions";
+import {
+  addPolicyRule,
+  allowOnceResponse,
+  alwaysAllowRule,
+  PERMISSION_ALWAYS,
+  decidePermission,
+  loadPolicy,
+  matchRule,
+  PERMISSION_ALLOW,
+  PERMISSION_REJECT,
+  permissionLabel,
+  permissionQuestion,
+  type PolicyRule,
+} from "./permissions";
 
 function requestWith(options: PermissionOption[]): RequestPermissionRequest {
   return { sessionId: "s1", toolCall: { toolCallId: "t1", title: "rm -rf build" }, options };
@@ -39,17 +52,35 @@ describe("policy rules", () => {
   });
 
   test("applies the first matching rule", () => {
-    expect(decidePermission(commandRequest("git push origin main", "Exec(git)"), rules).allowed).toBe(false);
+    const decision = decidePermission(commandRequest("git push origin main", "Exec(git)"), rules);
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toBe("reject rule");
   });
 
   test("matches on Devin's permission rule", () => {
     expect(decidePermission(commandRequest("dotnet build", "Exec(dotnet)"), rules).allowed).toBe(true);
   });
 
-  test("rejects a command that no rule matches", () => {
-    expect(decidePermission(commandRequest("rm -rf /", "Exec(rm)"), rules).response).toEqual({
-      outcome: { outcome: "selected", optionId: "reject_once" },
+  test("rejects a command that no rule matches, and lets the user decide instead", () => {
+    expect(decidePermission(commandRequest("rm -rf /", "Exec(rm)"), rules)).toEqual({
+      response: { outcome: { outcome: "selected", optionId: "reject_once" } },
+      allowed: false,
+      reason: "no matching rule",
+      askable: true,
     });
+  });
+
+  test("never lets the user decide a request that a reject rule matches", () => {
+    expect(decidePermission(commandRequest("git push origin main", "Exec(git)"), rules).askable).toBeUndefined();
+  });
+
+  test("lets the user decide a chained command", () => {
+    expect(decidePermission(commandRequest("git status && rm -rf ~", "Exec(git)"), rules).askable).toBe(true);
+  });
+
+  test("does not let the user decide when Devin offers no allow_once option", () => {
+    const request = { ...commandRequest("rm x", "Exec(rm)"), options: devinOptions.filter((o) => o.kind !== "allow_once") };
+    expect(decidePermission(request, rules).askable).toBeUndefined();
   });
 
   test("treats glob metacharacters other than * literally", () => {
@@ -60,7 +91,9 @@ describe("policy rules", () => {
   test.each(["git status && rm -rf ~", "git log; rm x", "git log | sh", "git log > /etc/x", "git $(rm x)", "git `rm x`", "git log\nrm x"])(
     "does not let an allow rule cover chained command %p",
     (command) => {
-      expect(decidePermission(commandRequest(command, "Exec(git)"), rules).allowed).toBe(false);
+      const decision = decidePermission(commandRequest(command, "Exec(git)"), rules);
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toBe("chained command");
     },
   );
 
@@ -70,7 +103,9 @@ describe("policy rules", () => {
 
   test("rejects when an allow rule matches but Devin offers no allow_once option", () => {
     const request = { ...commandRequest("git status", "Exec(git)"), options: devinOptions.filter((o) => o.kind !== "allow_once") };
-    expect(decidePermission(request, rules).allowed).toBe(false);
+    const decision = decidePermission(request, rules);
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toBe("no allow-once option");
   });
 });
 
@@ -103,7 +138,7 @@ describe("decidePermission", () => {
         { optionId: "reject", name: "Reject", kind: "reject_once" },
       ]),
     );
-    expect(decision).toEqual({ response: { outcome: { outcome: "selected", optionId: "reject" } }, allowed: false });
+    expect(decision).toEqual({ response: { outcome: { outcome: "selected", optionId: "reject" } }, allowed: false, reason: "no matching rule", askable: true });
   });
 
   test("falls back to reject_always", () => {
@@ -118,7 +153,7 @@ describe("decidePermission", () => {
 
   test("cancels when no reject option exists", () => {
     const decision = decidePermission(requestWith([{ optionId: "allow", name: "Allow", kind: "allow_once" }]));
-    expect(decision).toEqual({ response: { outcome: { outcome: "cancelled" } }, allowed: false });
+    expect(decision).toEqual({ response: { outcome: { outcome: "cancelled" } }, allowed: false, reason: "no matching rule", askable: true });
   });
 
   test("never picks switch_bypass, which Devin offers as an allow_always option", () => {
@@ -129,6 +164,88 @@ describe("decidePermission", () => {
       ]),
     );
     expect(decision.response).toEqual({ outcome: { outcome: "selected", optionId: "reject_once" } });
+  });
+});
+
+describe("permissionQuestion", () => {
+  test("shows the full command, the tool kind, Devin's rule and why no rule allowed it", () => {
+    const request: RequestPermissionRequest = {
+      ...commandRequest("git status && rm -rf ~", "Exec(git)"),
+      toolCall: { toolCallId: "t1", kind: "execute", _meta: { "cognition.ai/editableCommand": "git status && rm -rf ~", "cognition.ai/permissionRule": "Exec(git)" } },
+    };
+    expect(permissionQuestion(request, "chained command")).toEqual({
+      question: "Allow Devin to use `git status && rm -rf ~`? Tool: execute. Devin rule: Exec(git). Bridge policy: chained command.",
+      header: "Permission",
+      options: [
+        { label: PERMISSION_ALLOW, description: "Allow this call only." },
+        { label: PERMISSION_REJECT, description: "Devin tells its model that you rejected the call." },
+      ],
+    });
+  });
+
+  test("lists the paths of a file tool and leaves out missing details", () => {
+    const request: RequestPermissionRequest = {
+      sessionId: "s1",
+      toolCall: { toolCallId: "t1", title: "Edit file", kind: "edit", locations: [{ path: "/repo/a.ts" }, { path: "/repo/b.ts" }] },
+      options: devinOptions,
+    };
+    expect(permissionQuestion(request, "no matching rule").question).toBe(
+      "Allow Devin to use `Edit file`? Paths: /repo/a.ts, /repo/b.ts. Tool: edit. Bridge policy: no matching rule.",
+    );
+  });
+});
+
+describe("alwaysAllowRule", () => {
+  test("is an exact command rule for a plain command that no rule matched", () => {
+    expect(alwaysAllowRule(commandRequest("npm test", "Exec(npm)"), "no matching rule")).toEqual({ command: "npm test", decision: "allow" });
+  });
+
+  test("is not offered for chained commands, globs, other reasons or requests without a command", () => {
+    expect(alwaysAllowRule(commandRequest("git status && rm -rf ~", "Exec(git)"), "chained command")).toBeUndefined();
+    expect(alwaysAllowRule(commandRequest("ls *.ts", "Exec(ls)"), "no matching rule")).toBeUndefined();
+    expect(alwaysAllowRule(commandRequest("npm test", "Exec(npm)"), "reject rule")).toBeUndefined();
+    expect(alwaysAllowRule(requestWith(devinOptions), "no matching rule")).toBeUndefined();
+  });
+
+  test("adds a third prompt option only when a rule can be saved", () => {
+    const labels = (request: RequestPermissionRequest, reason: "no matching rule" | "chained command") =>
+      permissionQuestion(request, reason).options.map((option) => option.label);
+    expect(labels(commandRequest("npm test", "Exec(npm)"), "no matching rule")).toEqual([PERMISSION_ALLOW, PERMISSION_ALWAYS, PERMISSION_REJECT]);
+    expect(labels(commandRequest("a && b", "Exec(a)"), "chained command")).toEqual([PERMISSION_ALLOW, PERMISSION_REJECT]);
+  });
+});
+
+describe("addPolicyRule", () => {
+  const dir = mkdtempSync(join(tmpdir(), "devin-acp-bridge-add-rule-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("creates the file and its folder when they are missing", () => {
+    const path = join(dir, "new", "policy.json");
+    addPolicyRule({ command: "npm test", decision: "allow" }, path);
+    expect(loadPolicy(path)).toEqual([{ command: "npm test", decision: "allow" }]);
+  });
+
+  test("appends to the existing rules and keeps other keys", () => {
+    const path = join(dir, "policy.json");
+    writeFileSync(path, JSON.stringify({ note: "mine", rules: [{ command: "git *", decision: "reject" }] }));
+    addPolicyRule({ command: "npm test", decision: "allow" }, path);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
+      note: "mine",
+      rules: [{ command: "git *", decision: "reject" }, { command: "npm test", decision: "allow" }],
+    });
+  });
+
+  test("refuses to overwrite a file it cannot parse", () => {
+    const path = join(dir, "broken.json");
+    writeFileSync(path, "{ not json");
+    expect(() => addPolicyRule({ command: "npm test", decision: "allow" }, path)).toThrow();
+    expect(readFileSync(path, "utf8")).toBe("{ not json");
+  });
+});
+
+describe("allowOnceResponse", () => {
+  test("selects allow_once and never an allow_always option", () => {
+    expect(allowOnceResponse(requestWith(devinOptions))).toEqual({ outcome: { outcome: "selected", optionId: "allow_once" } });
   });
 });
 

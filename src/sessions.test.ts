@@ -1,6 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import type { ChatRequest } from "./openai";
-import { SessionStore, sessionKey, transcriptPrompt } from "./sessions";
+import { latestUserImages, SessionStore, sessionKey, transcriptPrompt } from "./sessions";
+
+describe("latestUserImages", () => {
+  test("takes images from the newest non-harness user message only", () => {
+    const image = (data: string) => ({ type: "image_url", image_url: { url: `data:image/png;base64,${data}` } });
+    const request: ChatRequest = {
+      messages: [
+        { role: "user", content: [{ type: "text", text: "old" }, image("OLD")] },
+        { role: "assistant", content: "ok" },
+        { role: "user", content: [{ type: "text", text: "new" }, image("NEW")] },
+        { role: "user", content: "<system-reminder>\nharness\n</system-reminder>" },
+      ],
+    };
+    expect(latestUserImages(request)).toEqual([{ type: "image", mimeType: "image/png", data: "NEW" }]);
+  });
+});
 
 function conversation(...turns: string[]): ChatRequest {
   return {
@@ -45,6 +60,44 @@ describe("SessionStore", () => {
   test("starts a fresh session with the transcript when the bridge has no entry for a later turn", () => {
     const request = conversation("hi", "hello", "next");
     expect(new SessionStore().plan("k", request)).toEqual({ action: "create", prompt: transcriptPrompt(request) });
+  });
+});
+
+describe("OpenCode plan-agent reminders", () => {
+  const reminder = { role: "user", content: "<system-reminder>\nYou are in Plan mode.\n</system-reminder>" };
+  const withMessages = (...messages: ChatRequest["messages"] & object) => ({ messages: [{ role: "system", content: "harness" }, ...messages] });
+  const first = withMessages(reminder, { role: "user", content: "hi" });
+  const afterReply = withMessages({ role: "user", content: "hi" }, { role: "assistant", content: "hello" }, reminder);
+
+  test("does not send the reminder to Devin or count it as a turn", () => {
+    const store = new SessionStore();
+    expect(store.plan("k", first)).toEqual({ action: "create", prompt: "hi" });
+    store.record("k", "devin-1", first);
+    const next = withMessages({ role: "user", content: "hi" }, { role: "assistant", content: "hello" }, { role: "user", content: "next" }, reminder);
+    expect(store.plan("k", next)).toEqual({ action: "reuse", sessionId: "devin-1", prompt: "next" });
+  });
+
+  test("skips a request whose only new user message is a reminder", () => {
+    const store = new SessionStore();
+    store.record("k", "devin-1", first);
+    expect(store.plan("k", afterReply)).toEqual({ action: "skip" });
+  });
+
+  test("also treats OpenCode's tool-catalog update as harness text", () => {
+    const update = { role: "user", content: [{ type: "text", text: "<system-update>\nThe Code Mode tool catalog has changed.\n</system-update>" }] };
+    const request = withMessages({ role: "user", content: "hi" }, { role: "assistant", content: "hello" }, update, reminder);
+    expect(new SessionStore().plan("k", request)).toEqual({ action: "skip" });
+  });
+
+  test("keeps a user message that only starts with a system tag", () => {
+    const request = withMessages({ role: "user", content: "<system-reminder>x</system-reminder> and my question" });
+    expect(new SessionStore().plan("k", request)).toEqual({ action: "create", prompt: "<system-reminder>x</system-reminder> and my question" });
+  });
+
+  test("keys and replays the conversation without reminders", () => {
+    expect(sessionKey(null, first, "/a")).toBe(sessionKey(null, afterReply, "/a"));
+    const request = withMessages(reminder, { role: "user", content: "hi" }, { role: "assistant", content: "hello" }, { role: "user", content: "next" });
+    expect(transcriptPrompt(request)).toBe(transcriptPrompt(conversation("hi", "hello", "next")));
   });
 });
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionConfigOption } from "@agentclientprotocol/sdk";
-import { filterModels, modelCatalog } from "./models";
+import { filterModels, modelCatalog, thoughtLevelFor, thoughtLevels } from "./models";
 
 const options = [
   { id: "mode", name: "Session Mode", type: "select", currentValue: "accept-edits", options: [{ value: "accept-edits", name: "Code" }] },
@@ -32,6 +32,29 @@ describe("modelCatalog", () => {
 
   test("returns an empty catalog when Devin sends no model option", () => {
     expect(modelCatalog(undefined)).toEqual({ models: [] });
+  });
+});
+
+describe("thoughtLevels", () => {
+  test("reads the allowed values and the current value of Devin's thought_level option", () => {
+    const withThought = [
+      ...options,
+      { id: "thought_level", type: "select", currentValue: "high", options: [{ value: "medium", name: "Medium" }, { value: "high", name: "High" }] },
+    ] as unknown as SessionConfigOption[];
+    expect(thoughtLevels(withThought)).toEqual({ levels: ["medium", "high"], current: "high" });
+  });
+
+  test("returns no levels when the model has none (adaptive)", () => {
+    expect(thoughtLevels(options)).toEqual({ levels: [] });
+  });
+});
+
+describe("thoughtLevelFor", () => {
+  test("maps an OpenCode variant to a Devin thought level, and OpenCode's `default` variant to none", () => {
+    expect(thoughtLevelFor("high")).toBe("high");
+    expect(thoughtLevelFor("default")).toBeUndefined();
+    expect(thoughtLevelFor(undefined)).toBeUndefined();
+    expect(thoughtLevelFor("")).toBeUndefined();
   });
 });
 

@@ -1,10 +1,18 @@
 import type { RequestPermissionRequest, RequestPermissionResponse } from "@agentclientprotocol/sdk";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { globMatches } from "./glob";
+import type { OpenCodeQuestion } from "./questions";
 
-export type PermissionDecision = { response: RequestPermissionResponse; allowed: boolean };
+export type RejectReason = "no matching rule" | "reject rule" | "chained command" | "no allow-once option";
+
+/** `askable`: no rule decided the request, so the user may decide it instead of the default reject (§6.13). */
+export type PermissionDecision = { response: RequestPermissionResponse; allowed: boolean; reason?: RejectReason; askable?: true };
+
+export const PERMISSION_ALLOW = "Allow once";
+export const PERMISSION_ALWAYS = "Always allow this command";
+export const PERMISSION_REJECT = "Reject";
 
 /** Glob patterns (`*` matches anything) against Devin's command, permission rule and tool title. */
 export type PolicyRule = { command?: string; rule?: string; title?: string; decision: "allow" | "reject" };
@@ -63,12 +71,71 @@ const SHELL_OPERATORS = /[;&|<>`\n]|\$\(/;
 export function decidePermission(request: RequestPermissionRequest, rules: PolicyRule[] = []): PermissionDecision {
   const allowOnce = request.options.find((option) => option.kind === "allow_once");
   const command = metaString(request, "cognition.ai/editableCommand") ?? "";
-  if (matchRule(rules, request)?.decision === "allow" && allowOnce && !SHELL_OPERATORS.test(command)) {
+  const decision = matchRule(rules, request)?.decision;
+  const chained = SHELL_OPERATORS.test(command);
+  if (decision === "allow" && allowOnce && !chained) {
     return { response: { outcome: { outcome: "selected", optionId: allowOnce.optionId } }, allowed: true };
   }
+  const reason: RejectReason = decision === undefined ? "no matching rule"
+    : decision === "reject" ? "reject rule"
+    : chained ? "chained command"
+    : "no allow-once option";
   const reject = request.options.find((option) => option.kind === "reject_once")
     ?? request.options.find((option) => option.kind === "reject_always");
+  const askable = allowOnce && (reason === "no matching rule" || reason === "chained command") ? { askable: true as const } : {};
   return reject
-    ? { response: { outcome: { outcome: "selected", optionId: reject.optionId } }, allowed: false }
-    : { response: { outcome: { outcome: "cancelled" } }, allowed: false };
+    ? { response: { outcome: { outcome: "selected", optionId: reject.optionId } }, allowed: false, reason, ...askable }
+    : { response: { outcome: { outcome: "cancelled" } }, allowed: false, reason, ...askable };
+}
+
+/** The response for a user's "Allow once". Never an `allow_always` option, so never `switch_bypass`. */
+export function allowOnceResponse(request: RequestPermissionRequest): RequestPermissionResponse {
+  const allowOnce = request.options.find((option) => option.kind === "allow_once");
+  return allowOnce ? { outcome: { outcome: "selected", optionId: allowOnce.optionId } } : { outcome: { outcome: "cancelled" } };
+}
+
+/**
+ * The rule that "Always allow" saves: the exact command, and only for a plain command that no rule matched. A
+ * chained command can never be allowed by a rule, and `*` in a command would become a glob.
+ */
+export function alwaysAllowRule(request: RequestPermissionRequest, reason: RejectReason): PolicyRule | undefined {
+  const command = metaString(request, "cognition.ai/editableCommand");
+  if (reason !== "no matching rule" || !command || command.includes("*") || SHELL_OPERATORS.test(command)) return undefined;
+  return { command, decision: "allow" };
+}
+
+/** Appends a rule to the policy file. Throws, and leaves the file as it is, when the file is not valid policy JSON. */
+export function addPolicyRule(rule: PolicyRule, path = defaultPolicyPath): void {
+  let policy: { rules: unknown[]; [key: string]: unknown } = { rules: [] };
+  if (existsSync(path)) {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as { rules?: unknown };
+    if (!Array.isArray(parsed.rules)) throw new Error("expected { \"rules\": [...] }");
+    policy = parsed as typeof policy;
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  const temporary = `${path}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify({ ...policy, rules: [...policy.rules, rule] }, null, 2)}\n`, { mode: 0o600 });
+  renameSync(temporary, path);
+}
+
+export function permissionQuestion(request: RequestPermissionRequest, reason: RejectReason): OpenCodeQuestion {
+  const paths = (request.toolCall.locations ?? []).map((location) => location.path);
+  const rule = metaString(request, "cognition.ai/permissionRule");
+  const details = [
+    paths.length ? `Paths: ${paths.join(", ")}.` : undefined,
+    request.toolCall.kind ? `Tool: ${request.toolCall.kind}.` : undefined,
+    rule ? `Devin rule: ${rule}.` : undefined,
+    `Bridge policy: ${reason}.`,
+  ];
+  return {
+    question: [`Allow Devin to use ${permissionLabel(request)}?`, ...details].filter(Boolean).join(" "),
+    header: "Permission",
+    options: [
+      { label: PERMISSION_ALLOW, description: "Allow this call only." },
+      ...(alwaysAllowRule(request, reason)
+        ? [{ label: PERMISSION_ALWAYS, description: "Allow now, and add an allow rule for this exact command to the bridge policy file." }]
+        : []),
+      { label: PERMISSION_REJECT, description: "Devin tells its model that you rejected the call." },
+    ],
+  };
 }

@@ -1,7 +1,14 @@
 import type { StopReason } from "@agentclientprotocol/sdk";
 
-export type ChatContentPart = { type: string; text?: string };
-export type ChatMessage = { role: string; content: string | ChatContentPart[] | null };
+export type ChatContentPart = { type: string; text?: string; image_url?: { url?: string } };
+export type ImageBlock = { type: "image"; mimeType: string; data: string };
+export type ToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
+export type ChatMessage = {
+  role: string;
+  content: string | ChatContentPart[] | null;
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
+};
 export type ChatRequest = {
   model?: string;
   stream?: boolean;
@@ -20,6 +27,17 @@ export function messageText(message: ChatMessage | undefined): string {
     .filter((part) => part.type === "text" && typeof part.text === "string")
     .map((part) => part.text)
     .join("\n");
+}
+
+const DATA_URL = /^data:([\w.+-]+\/[\w.+-]+);base64,(.+)$/s;
+
+/** Images OpenCode attached as base64 data URLs. Devin accepts image prompt blocks (`promptCapabilities.image`). */
+export function messageImages(message: ChatMessage | undefined): ImageBlock[] {
+  if (!message || typeof message.content === "string" || !message.content) return [];
+  return message.content.flatMap((part) => {
+    const match = part.type === "image_url" ? part.image_url?.url?.match(DATA_URL) : undefined;
+    return match ? [{ type: "image" as const, mimeType: match[1]!, data: match[2]! }] : [];
+  });
 }
 
 export function lastUserText(request: ChatRequest): string {
@@ -51,7 +69,16 @@ export function finishReason(stopReason: StopReason): "stop" | "length" | "conte
   }
 }
 
-export type Delta = { role?: "assistant"; content?: string; reasoning_content?: string };
+export type Delta = {
+  role?: "assistant";
+  content?: string;
+  reasoning_content?: string;
+  tool_calls?: Array<ToolCall & { index: number }>;
+};
+
+export function offersTool(request: ChatRequest, name: string): boolean {
+  return (request.tools ?? []).some((tool) => (tool as { function?: { name?: unknown } } | null)?.function?.name === name);
+}
 
 export function sseChunk(model: string, delta: Delta, finish: string | null = null): string {
   return `data: ${JSON.stringify({
@@ -78,13 +105,13 @@ export function sseUsageChunk(model: string, usage: Usage = NO_USAGE): string {
   })}\n\n`;
 }
 
-export function completion(model: string, content: string, finish: string): object {
+export function completion(model: string, content: string, finish: string, toolCalls?: ToolCall[]): object {
   return {
     id: "chatcmpl-devin",
     object: "chat.completion",
     created: Math.floor(Date.now() / 1000),
     model,
-    choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: finish }],
+    choices: [{ index: 0, message: { role: "assistant", content, ...(toolCalls ? { tool_calls: toolCalls } : {}) }, finish_reason: finish }],
     usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
   };
 }
