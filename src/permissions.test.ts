@@ -11,6 +11,10 @@ import {
   decidePermission,
   loadPolicy,
   matchRule,
+  nativePermission,
+  nativePermissionAnswer,
+  PERMISSION_NATIVE_ALWAYS,
+  permissionToolCall,
   PERMISSION_ALLOW,
   PERMISSION_REJECT,
   permissionLabel,
@@ -265,5 +269,47 @@ describe("permissionLabel", () => {
 
   test("falls back to a generic label", () => {
     expect(permissionLabel({ sessionId: "s1", toolCall: { toolCallId: "t1" }, options: [] })).toBe("tool call");
+  });
+});
+
+describe("nativePermission", () => {
+  const request = (meta: Record<string, string>): RequestPermissionRequest => ({
+    sessionId: "s",
+    toolCall: { toolCallId: "t", _meta: meta },
+    options: [{ optionId: "allow_once", name: "Allow", kind: "allow_once" }],
+  });
+
+  test("shows a plain command as a shell command that Always can save", () => {
+    expect(nativePermission(request({ "cognition.ai/editableCommand": "git status" }), "no matching rule")).toEqual({
+      title: "Run git status", action: "bash", resources: ["git status"], save: ["git status"], chained: false,
+    });
+  });
+
+  test("never offers Always for a chained command", () => {
+    const check = nativePermission(request({ "cognition.ai/editableCommand": "git status && rm -rf ~" }), "chained command");
+    expect(check.save).toEqual([]);
+    expect(check.chained).toBe(true);
+  });
+
+  test("names an MCP tool as the action", () => {
+    expect(nativePermission(request({ "cognition.ai/permissionRule": "mcp__slack__slack_read_channel" }), "no matching rule")).toEqual({
+      title: "Use mcp__slack__slack_read_channel", action: "mcp__slack__slack_read_channel", resources: ["*"], save: ["*"], chained: false,
+    });
+  });
+
+  test("falls back to devin-other with no Always", () => {
+    const check = nativePermission(request({ "cognition.ai/permissionRule": "Read(/etc/hosts)" }), "no matching rule");
+    expect(check).toEqual({ title: "Allow Read(/etc/hosts)", action: "devin-other", resources: ["Read(/etc/hosts)"], save: [], chained: false });
+  });
+
+  test("sends only the title in the tool call", () => {
+    const call = permissionToolCall("call_1", nativePermission(request({ "cognition.ai/editableCommand": "ls" }), "no matching rule"));
+    expect(call.function).toEqual({ name: "devin_permission", arguments: '{"title":"Run ls"}' });
+  });
+
+  test("maps the tool result to an answer", () => {
+    expect(nativePermissionAnswer("ALLOWED")).toEqual([[PERMISSION_ALLOW]]);
+    expect(nativePermissionAnswer(" ALLOWED_ALWAYS\n")).toEqual([[PERMISSION_NATIVE_ALWAYS]]);
+    expect(nativePermissionAnswer("The user rejected permission to use this specific tool call.")).toBeUndefined();
   });
 });

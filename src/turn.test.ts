@@ -10,6 +10,7 @@ import type {
 import type { TurnEvent } from "./devin";
 import type { Delta } from "./openai";
 import { TurnRenderer } from "./render";
+import { nativePermissionAnswer } from "./permissions";
 import { Turn } from "./turn";
 
 const elicitation = {
@@ -192,6 +193,83 @@ describe("Turn", () => {
     expect(last.text()).toContain("> **Permission** rejected by you: `rm x`");
   });
 
+  test("asks through the native permission check when the request offered it", async () => {
+    const devin = fakePrompt();
+    const turn = new Turn(new TurnRenderer("/"), devin.run, () => "call_n");
+    const step = turn.next(() => {}, { question: true, permission: true });
+    const reply = devin.askPermission();
+    const paused = await step;
+    expect(paused).toEqual({
+      kind: "permission",
+      callId: "call_n",
+      permission: { title: "Run rm x", action: "bash", resources: ["rm x"], save: ["rm x"], chained: false },
+    });
+    expect(turn.awaitingPermission).toBe(true);
+    expect(turn.question).toBeUndefined();
+    const out = collector();
+    turn.next(out.sink, { question: true, permission: true });
+    turn.answer(nativePermissionAnswer("ALLOWED"));
+    expect(await reply).toEqual(ALLOWED);
+    expect(out.text()).toContain("> **Permission** allowed by you: `rm x`");
+  });
+
+  test("saves a rule for OpenCode's Always, and allows once when no rule can be saved", async () => {
+    for (const [remember, expectSaved] of [[true, 1], [false, 0]] as const) {
+      const devin = fakePrompt();
+      const turn = new Turn(new TurnRenderer("/"), devin.run, () => "call_n");
+      const step = turn.next(() => {}, { question: true, permission: true });
+      let saved = 0;
+      const reply = devin.askPermission(remember ? () => void saved++ : undefined);
+      await step;
+      turn.next(() => {}, { question: true, permission: true });
+      turn.answer(nativePermissionAnswer("ALLOWED_ALWAYS"));
+      expect(await reply).toEqual(ALLOWED);
+      expect(saved).toBe(expectSaved);
+    }
+  });
+
+  test("rejects when the native permission check returns anything else", async () => {
+    const devin = fakePrompt();
+    const turn = new Turn(new TurnRenderer("/"), devin.run, () => "call_n");
+    const step = turn.next(() => {}, { question: true, permission: true });
+    const reply = devin.askPermission();
+    await step;
+    turn.next(() => {}, { question: true, permission: true });
+    turn.answer(nativePermissionAnswer("Error: The user rejected permission"));
+    expect(await reply).toEqual(REJECTED);
+  });
+
+  test("uses the question when the request offered no native permission check", async () => {
+    const devin = fakePrompt();
+    const turn = new Turn(new TurnRenderer("/"), devin.run, () => "call_q");
+    const step = turn.next(() => {}, { question: true });
+    void devin.askPermission();
+    const paused = await step;
+    expect(paused.kind).toBe("question");
+    expect(turn.awaitingPermission).toBe(false);
+  });
+
+  test("ends the response with a todo list when the plan changes, and as markdown without the todo tool", async () => {
+    const plan = (status: "pending" | "completed"): SessionUpdate => ({
+      sessionUpdate: "plan",
+      entries: [{ content: "Alpha", status, priority: "medium" }],
+    });
+    const devin = fakePrompt();
+    const turn = new Turn(new TurnRenderer("/", { todos: true }), devin.run, () => "call_t");
+    const step = turn.next(() => {}, { question: true, todo: true });
+    devin.update(plan("pending"));
+    expect(await step).toEqual({ kind: "todos", callId: "call_t", entries: [{ content: "Alpha", status: "pending", priority: "medium" }] });
+    const out = collector();
+    const next = turn.next(out.sink, { question: true, todo: false });
+    turn.answer(undefined);
+    devin.update(plan("pending"));
+    devin.update(plan("completed"));
+    devin.end();
+    expect(await next).toEqual({ kind: "done", stopReason: "end_turn" });
+    expect(out.text()).toContain("- [x] Alpha");
+    expect(out.text().match(/\*\*Plan\*\*/g)?.length).toBe(1);
+  });
+
   test("rejects an unmatched permission by policy when OpenCode did not offer the question tool", async () => {
     const devin = fakePrompt();
     const turn = new Turn(new TurnRenderer("/"), devin.run);
@@ -236,7 +314,7 @@ describe("Turn", () => {
     const ids = ["call_card", "call_q"];
     const turn = new Turn(new TurnRenderer("/", { cards: true }), devin.run, () => ids.shift()!);
     const first = collector();
-    const step = turn.next(first.sink, true, true);
+    const step = turn.next(first.sink, { question: true, card: true });
     devin.say("before ");
     devin.update({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Read file", kind: "read" });
     devin.update({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed" });
@@ -246,7 +324,7 @@ describe("Turn", () => {
     expect(turn.pendingCallId).toBe("call_card");
     turn.answer(undefined);
     const second = collector();
-    const paused = await turn.next(second.sink, true, true);
+    const paused = await turn.next(second.sink, { question: true, card: true });
     expect(paused.kind === "question" && paused.question.callId).toBe("call_q");
     expect(first.text()).toBe("before ");
     expect(second.text()).toBe("after ");
@@ -258,7 +336,7 @@ describe("Turn", () => {
     const devin = fakePrompt();
     const turn = new Turn(new TurnRenderer("/", { cards: true }), devin.run);
     const out = collector();
-    const step = turn.next(out.sink, true, false);
+    const step = turn.next(out.sink, { question: true, card: false });
     devin.update({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Read file", kind: "read" });
     devin.update({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed" });
     devin.end();

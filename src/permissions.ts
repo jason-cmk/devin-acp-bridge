@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { globMatches } from "./glob";
+import type { ToolCall } from "./openai";
 import type { OpenCodeQuestion } from "./questions";
 
 export type RejectReason = "no matching rule" | "reject rule" | "chained command" | "no allow-once option";
@@ -13,6 +14,8 @@ export type PermissionDecision = { response: RequestPermissionResponse; allowed:
 export const PERMISSION_ALLOW = "Allow once";
 export const PERMISSION_ALWAYS = "Always allow this command";
 export const PERMISSION_REJECT = "Reject";
+/** The answer for OpenCode's native "Always" (§6.17); never a label in the question. */
+export const PERMISSION_NATIVE_ALWAYS = "Always (OpenCode)";
 
 /** Glob patterns (`*` matches anything) against Devin's command, permission rule and tool title. */
 export type PolicyRule = { command?: string; rule?: string; title?: string; decision: "allow" | "reject" };
@@ -138,4 +141,46 @@ export function permissionQuestion(request: RequestPermissionRequest, reason: Re
       { label: PERMISSION_REJECT, description: "Devin tells its model that you rejected the call." },
     ],
   };
+}
+
+/** The plugin registers this tool; its `execute` asks OpenCode's own permission system (§6.17). */
+export const PERMISSION_TOOL = "devin_permission";
+/** The tool results that allow the call. Any other result, including an error, rejects it. */
+export const PERMISSION_ALLOWED_RESULT = "ALLOWED";
+/** The user chose "Always": allow, and save an exact-command allow rule to the bridge policy file. */
+export const PERMISSION_ALLOWED_ALWAYS_RESULT = "ALLOWED_ALWAYS";
+
+/**
+ * A Devin permission request as an OpenCode permission check. `action` picks how OpenCode's dialog shows it:
+ * `bash` shows "Shell command" and the command; an MCP rule name shows "Call tool <name>". OpenCode's `shell`
+ * action is never used, so an agent that denies OpenCode's shell still asks for Devin's commands. The plugin turns
+ * every `allow` for these checks into `ask` (§6.17). `save` is what OpenCode's "Always" offers: the exact
+ * command, or nothing for a chained command, so `git status && rm -rf ~` never gets an "Always" option.
+ */
+export type NativePermission = { title: string; action: string; resources: string[]; save: string[]; chained: boolean };
+
+export function nativePermission(request: RequestPermissionRequest, reason: RejectReason): NativePermission {
+  const command = metaString(request, "cognition.ai/editableCommand");
+  const rule = metaString(request, "cognition.ai/permissionRule");
+  const label = permissionLabel(request).replace(/^`|`$/g, "");
+  if (command) {
+    const chained = SHELL_OPERATORS.test(command);
+    const save = alwaysAllowRule(request, reason) ? [command] : [];
+    return { title: `Run ${command.split("\n")[0]}`, action: "bash", resources: [command], save, chained };
+  }
+  if (rule?.startsWith("mcp__")) return { title: `Use ${rule}`, action: rule, resources: ["*"], save: ["*"], chained: false };
+  const resource = rule ?? request.toolCall.title ?? label;
+  return { title: `Allow ${resource}`, action: "devin-other", resources: [resource], save: [], chained: false };
+}
+
+export function permissionToolCall(callId: string, permission: NativePermission): ToolCall {
+  return { id: callId, type: "function", function: { name: PERMISSION_TOOL, arguments: JSON.stringify({ title: permission.title }) } };
+}
+
+/** The `devin_permission` tool result as the answer to the permission question: allow, always, or reject. */
+export function nativePermissionAnswer(result: string): string[][] | undefined {
+  const text = result.trim();
+  if (text === PERMISSION_ALLOWED_ALWAYS_RESULT) return [[PERMISSION_NATIVE_ALWAYS]];
+  if (text === PERMISSION_ALLOWED_RESULT) return [[PERMISSION_ALLOW]];
+  return undefined;
 }

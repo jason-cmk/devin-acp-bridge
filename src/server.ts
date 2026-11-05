@@ -21,9 +21,9 @@ import {
 import { removeStateIfOwned, writeState } from "./managed";
 import { AGENT_HEADER, devinModeFor } from "./modes";
 import { DEFAULT_MODEL_ID, THOUGHT_HEADER, thoughtLevelFor, thoughtLevels, type DevinModel, type ModelCatalog, type ThoughtLevels } from "./models";
-import { defaultPolicyPath } from "./permissions";
+import { defaultPolicyPath, type NativePermission, nativePermissionAnswer, PERMISSION_TOOL, permissionToolCall } from "./permissions";
 import { parseAnswers, QUESTION_TOOL, questionToolCall, toolResultText } from "./questions";
-import { CARD_TOOL, CardStore, cardToolCall, TurnRenderer } from "./render";
+import { CARD_TOOL, CardStore, cardToolCall, TODO_TOOL, todoToolCall, TurnRenderer } from "./render";
 import { compactionSummary, latestUserImages, latestUserText, SessionStore, sessionKey } from "./sessions";
 import { devinTitle, TitleBoard } from "./titles";
 import { Turn, type TurnStep } from "./turn";
@@ -74,6 +74,8 @@ const liveTurns = new Map<string, { turn: Turn; sessionId: string }>();
 const pendingSteers = new Map<string, string>();
 /** Card output for the plugin's `devin` tool, by call ID (§6.16). */
 const cards = new CardStore();
+/** Native permission checks for the plugin's `devin_permission` tool, by call ID (§6.17). */
+const permissionChecks = new CardStore<NativePermission>();
 let catalog: { value: Promise<ModelCatalog>; fetchedAt: number } | undefined;
 
 devin.onExit(() => {
@@ -120,7 +122,8 @@ async function takeParkedTurn(key: string, body: ChatRequest): Promise<ParkedTur
   const result = callId && toolResultText(body, callId);
   if (callId && result !== undefined) {
     const question = parked.turn.question;
-    parked.turn.answer(question && parseAnswers(result, question.form.questions));
+    if (parked.turn.awaitingPermission) parked.turn.answer(nativePermissionAnswer(result));
+    else parked.turn.answer(question && parseAnswers(result, question.form.questions));
     return parked;
   }
   parked.turn.abandon();
@@ -277,7 +280,7 @@ async function chatResponse(request: Request, body: ChatRequest): Promise<Respon
   sessions.record(key, sessionId, body);
   busySessions.add(sessionId);
   titleKeys.set(sessionId, { key, prompt: plan.prompt });
-  const renderer = new TurnRenderer(cwd, { cards: offersTool(body, CARD_TOOL) });
+  const renderer = new TurnRenderer(cwd, { cards: offersTool(body, CARD_TOOL), todos: offersTool(body, TODO_TOOL) });
   const turn = new Turn(renderer, (onEvent) => devin.prompt(sessionId, plan.prompt, onEvent, latestUserImages(body)));
   liveTurns.set(key, { turn, sessionId });
   turn.finished
@@ -305,7 +308,7 @@ async function steerResponse(body: { session?: unknown; text?: unknown } | null)
     pendingSteers.delete(key);
     // A tool card already ended the response; OpenCode sends its result together with the steer message.
     const parked = parkedTurns.get(key);
-    if (!parked || parked.turn.question || parked.steer !== undefined) return Response.json({ steered: false, reason: "the turn is waiting for an answer" });
+    if (!parked || parked.turn.question || parked.turn.awaitingPermission || parked.steer !== undefined) return Response.json({ steered: false, reason: "the turn is waiting for an answer" });
     parked.steer = body.text;
   }
   devin.steer(live.sessionId, body.text).catch((error) => console.error("Could not steer the Devin turn:", (error as Error).message));
@@ -319,6 +322,11 @@ function pauseCall(step: TurnStep): ToolCall | undefined {
     cards.put(step.callId, step.card);
     return cardToolCall(step.callId, step.card);
   }
+  if (step.kind === "todos") return todoToolCall(step.callId, step.entries);
+  if (step.kind === "permission") {
+    permissionChecks.put(step.callId, step.permission);
+    return permissionToolCall(step.callId, step.permission);
+  }
   return undefined;
 }
 
@@ -330,10 +338,15 @@ async function turnResponse(request: Request, body: ChatRequest, key: string, se
     if (attached && busySessions.has(sessionId)) devin.cancel(sessionId).catch(() => {});
   });
   const next = (sink: (delta: Delta) => void): Promise<TurnStep> =>
-    turn.next(sink, offersTool(body, QUESTION_TOOL), offersTool(body, CARD_TOOL)).then(
+    turn.next(sink, {
+      question: offersTool(body, QUESTION_TOOL),
+      card: offersTool(body, CARD_TOOL),
+      todo: offersTool(body, TODO_TOOL),
+      permission: offersTool(body, PERMISSION_TOOL),
+    }).then(
       (step) => {
         attached = false;
-        if (step.kind === "question" || step.kind === "card") park(key, sessionId, turn);
+        if (step.kind === "question" || step.kind === "card" || step.kind === "todos" || step.kind === "permission") park(key, sessionId, turn);
         if (step.kind === "steered") {
           park(key, sessionId, turn, pendingSteers.get(key) ?? "");
           pendingSteers.delete(key);
@@ -441,6 +454,10 @@ const server = Bun.serve({
       } catch (error) {
         return errorResponse(502, `Could not read Devin's commands: ${(error as Error).message}`);
       }
+    }
+    if (request.method === "GET" && url.pathname.startsWith("/v1/permissions/")) {
+      const check = permissionChecks.get(decodeURIComponent(url.pathname.slice("/v1/permissions/".length)));
+      return check ? Response.json(check) : errorResponse(404, "No permission check with this call ID.");
     }
     if (request.method === "GET" && url.pathname.startsWith("/v1/cards/")) {
       const card = cards.get(decodeURIComponent(url.pathname.slice("/v1/cards/".length)));

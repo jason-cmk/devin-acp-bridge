@@ -33,13 +33,21 @@ export function cardToolCall(callId: string, card: ToolCard): ToolCall {
   return { id: callId, type: "function", function: { name: CARD_TOOL, arguments: JSON.stringify({ title: card.title }) } };
 }
 
+/** OpenCode's own todo tool (`experimental.todo`); Devin's plan goes to it as a native todo list (§6.18). */
+export const TODO_TOOL = "todowrite";
+
+export function todoToolCall(callId: string, entries: PlanEntry[]): ToolCall {
+  const todos = entries.map((entry) => ({ content: entry.content, status: entry.status }));
+  return { id: callId, type: "function", function: { name: TODO_TOOL, arguments: JSON.stringify({ todos }) } };
+}
+
 /** Cards by call ID, for the plugin's `execute`. Keeps the newest `limit` cards. */
-export class CardStore {
-  private readonly cards = new Map<string, ToolCard>();
+export class CardStore<T = ToolCard> {
+  private readonly cards = new Map<string, T>();
 
   constructor(private readonly limit = 500) {}
 
-  put(callId: string, card: ToolCard): void {
+  put(callId: string, card: T): void {
     this.cards.delete(callId);
     this.cards.set(callId, card);
     for (const oldest of this.cards.keys()) {
@@ -48,7 +56,7 @@ export class CardStore {
     }
   }
 
-  get(callId: string): ToolCard | undefined {
+  get(callId: string): T | undefined {
     return this.cards.get(callId);
   }
 }
@@ -120,15 +128,28 @@ export class TurnRenderer {
   private latestPlan?: PlanEntry[];
   private readonly cards: ToolCard[] = [];
   private readonly withCards: boolean;
+  private readonly todos: PlanEntry[][] = [];
+  private readonly withTodos: boolean;
   usage?: TurnUsage;
 
-  constructor(private readonly cwd: string, options: { cards?: boolean } = {}) {
+  constructor(private readonly cwd: string, options: { cards?: boolean; todos?: boolean } = {}) {
     this.withCards = options.cards ?? false;
+    this.withTodos = options.todos ?? false;
   }
 
   /** Card mode: the next finished tool call, in the order the tools finished. */
   takeCard(): ToolCard | undefined {
     return this.cards.shift();
+  }
+
+  /** Todo mode: the next changed plan, in order. */
+  takeTodos(): PlanEntry[] | undefined {
+    return this.todos.shift();
+  }
+
+  /** A plan as markdown, for a response whose request did not offer the todo tool. */
+  planMarkdown(entries: PlanEntry[]): Delta[] {
+    return this.block(planBlock(entries));
   }
 
   /** A card as markdown, for a response whose request did not offer the card tool. */
@@ -231,6 +252,12 @@ export class TurnRenderer {
   }
 
   private plan(entries: PlanEntry[]): Delta[] {
+    if (this.withTodos) {
+      const key = JSON.stringify(entries);
+      if (key !== this.renderedPlanKey) this.todos.push(entries);
+      this.renderedPlanKey = key;
+      return [];
+    }
     this.latestPlan = entries;
     if (this.renderedPlanKey !== undefined) return [];
     this.renderedPlanKey = JSON.stringify(entries);

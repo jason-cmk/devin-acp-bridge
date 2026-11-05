@@ -7,7 +7,11 @@ import { COMMAND_PREFIX, commandPrompt, type DevinCommand } from "../src/command
 import { buildId, cacheDir, ensureBridge } from "../src/managed";
 import { AGENT_HEADER } from "../src/modes";
 import { DEFAULT_MODEL_ID, filterModels, THOUGHT_HEADER, thoughtLevelFor, type DevinModel } from "../src/models";
+import { type NativePermission, PERMISSION_ALLOWED_ALWAYS_RESULT, PERMISSION_ALLOWED_RESULT, PERMISSION_TOOL } from "../src/permissions";
 import { CARD_TOOL } from "../src/render";
+
+/** Metadata key that marks the plugin's native permission checks for Devin's calls. */
+const DEVIN_PERMISSION_FLAG = "devinBridge";
 
 const DEFAULTS = {
   provider: "devin",
@@ -51,6 +55,34 @@ async function fetchModels(baseURL: string, token: string): Promise<DevinModel[]
       ...(typeof entry.default_thought_level === "string" ? { defaultThoughtLevel: entry.default_thought_level } : {}),
     }];
   });
+}
+
+/** How long a permission check waits for OpenCode's reply event after `assert` resolves. */
+const REPLY_WAIT_MS = 1000;
+
+async function waitFor<T>(read: () => T | undefined, timeoutMs: number): Promise<T | undefined> {
+  const end = Date.now() + timeoutMs;
+  for (let value = read(); ; value = read()) {
+    if (value !== undefined || Date.now() >= end) return value;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+/** The permission check that the bridge stored for this call ID, or undefined when the bridge does not have it. */
+async function permissionCheck(baseURL: string | undefined, callId: string): Promise<NativePermission | undefined> {
+  if (!baseURL) return undefined;
+  try {
+    const response = await fetch(`${baseURL}/permissions/${encodeURIComponent(callId)}`, {
+      headers: { authorization: `Bearer ${resolveToken().value}` },
+    });
+    if (!response.ok) return undefined;
+    const check = (await response.json()) as Partial<NativePermission>;
+    const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
+    if (typeof check.action !== "string" || !strings(check.resources) || !strings(check.save)) return undefined;
+    return { title: String(check.title ?? ""), action: check.action, resources: check.resources, save: check.save, chained: check.chained === true };
+  } catch {
+    return undefined;
+  }
 }
 
 /** The card output that the bridge stored for this call ID; a note instead when the bridge does not have it. */
@@ -99,6 +131,11 @@ export default Plugin.define({
     const externalBaseURL = typeof ctx.options.baseURL === "string" ? ctx.options.baseURL.replace(/\/$/, "") : undefined;
     const withCommands = ctx.options.commands !== false;
     const withCards = ctx.options.toolCards === true;
+    const withNativePermissions = ctx.options.nativePermissions !== false;
+    // The user's reply to each native permission check, by the `devin_permission` call ID. Filled from
+    // `permission.asked` (request ID → call ID) and `permission.replied` events.
+    const permissionCalls = new Map<string, string>();
+    const permissionReplies = new Map<string, "once" | "always" | "reject">();
     if (ctx.options.debug === true) debugEnabled = true;
 
     let baseURL = externalBaseURL;
@@ -140,6 +177,51 @@ export default Plugin.define({
             return { content: await cardOutput(baseURL, context.id), metadata: { title } };
           },
         });
+      });
+    }
+
+    // Native permission prompts (spec §6.17): the bridge ends a response with a `devin_permission` call when Devin
+    // asks a permission that no bridge policy rule decided. This tool asks OpenCode's own permission system, so
+    // the user's `permission` rules, the native dialog, "Always" and auto-accept all apply.
+    if (withNativePermissions) {
+      await ctx.tool.transform((editor) => {
+        editor.add({
+          name: PERMISSION_TOOL,
+          description: "Asks the user to allow a tool call that Devin wants to run. It has no other effect; never call it yourself.",
+          input: {
+            type: "object",
+            properties: { title: { type: "string" } },
+            required: ["title"],
+          },
+          options: { codemode: false },
+          execute: async (input, context) => {
+            const title = typeof (input as { title?: unknown } | undefined)?.title === "string" ? (input as { title: string }).title : PERMISSION_TOOL;
+            const check = await permissionCheck(baseURL, context.id);
+            if (!check) throw new Error("The bridge has no permission request for this call, so it stays rejected.");
+            await ctx.permission.assert({
+              sessionID: context.sessionID,
+              agent: context.agent,
+              action: check.action,
+              resources: check.resources,
+              save: check.save,
+              metadata: { [DEVIN_PERMISSION_FLAG]: true, title: check.title, chained: check.chained },
+              source: { type: "tool", messageID: context.messageID, id: context.id },
+            });
+            // "Always" makes the bridge save an exact-command allow rule (spec §6.17). The reply event can arrive
+            // just after `assert` resolves, so wait briefly for it.
+            const reply = await waitFor(() => permissionReplies.get(context.id), REPLY_WAIT_MS);
+            permissionReplies.delete(context.id);
+            return { content: reply === "always" ? PERMISSION_ALLOWED_ALWAYS_RESULT : PERMISSION_ALLOWED_RESULT, metadata: { title } };
+          },
+        });
+      });
+      // OpenCode's agents start with a broad `* allow` rule, so a Devin call would be allowed with no prompt.
+      // Devin's calls therefore never get `allow` from a rule: they ask, unless a rule denies them. Allow rules
+      // live in the bridge policy file, which decides before this check; "Always" saves one there.
+      await ctx.permission.hook("evaluate", (evaluation) => {
+        if (evaluation.metadata?.[DEVIN_PERMISSION_FLAG] !== true) return;
+        log("debug", `evaluate ${evaluation.action} ${JSON.stringify(evaluation.resources)} effect=${evaluation.effect}`);
+        if (evaluation.effect === "allow") evaluation.effect = "ask";
       });
     }
 
@@ -246,6 +328,30 @@ export default Plugin.define({
         log("debug", `steer ${sessionID}: ${response instanceof Error ? response.message : `${response.status} ${await response.text()}`}`);
       }
     };
+    const trackPermissionReplies = async () => {
+      for await (const event of ctx.event.subscribe({ types: ["permission.asked", "permission.replied"], signal: events.signal })) {
+        if (event.type === "permission.asked") {
+          const { id, metadata, source } = event.data;
+          if (metadata?.[DEVIN_PERMISSION_FLAG] === true && source?.id) permissionCalls.set(id, source.id);
+        } else if (event.type === "permission.replied") {
+          const callId = permissionCalls.get(event.data.requestID);
+          if (!callId) continue;
+          permissionCalls.delete(event.data.requestID);
+          permissionReplies.set(callId, event.data.reply);
+          log("debug", `permission ${callId}: ${event.data.reply}`);
+        }
+      }
+    };
+    if (withNativePermissions) {
+      void (async () => {
+        while (!events.signal.aborted) {
+          await trackPermissionReplies().catch((error: Error) => {
+            if (!events.signal.aborted) log("error", `${ctx.location.directory}: permission events stopped, retrying: ${error.message}`);
+          });
+          await new Promise((resolve) => setTimeout(resolve, STEER_RETRY_MS));
+        }
+      })();
+    }
     void (async () => {
       while (!events.signal.aborted) {
         await forwardSteers().catch((error: Error) => {

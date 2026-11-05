@@ -67,7 +67,9 @@ plugins that fight over the `devin` provider.
       ]
     }
   },
-  "compaction": { "auto": false }
+  "compaction": { "auto": false },
+  // Devin's plan in OpenCode's todo list and sidebar panel. Without it the plan shows as a checklist.
+  "experimental": { "todo": true }
 }
 ```
 
@@ -164,7 +166,9 @@ Add the `devin` agent from step 2 as well. In this mode the plugin only refreshe
 - One line per tool call, for example `> **Read file** \`src/app.ts\`` or `> **Run** \`git status\``.
 - Shell output (first 20 lines) and non-zero exit codes.
 - File edits as `diff` blocks.
-- Devin's plan at the start of a turn, and again at the end if it changed.
+- Devin's plan in OpenCode's own todo list and sidebar panel, updated each time the plan changes. This needs
+  `"experimental": { "todo": true }` in your OpenCode config; without it the plan shows as a checklist in the
+  reply, at the start of a turn and again at the end if it changed.
 - Permission decisions, for example `> **Permission** rejected by bridge policy (reject rule): \`rm -rf build\``
   or `> **Permission** allowed by you: \`npm test\``. Devin tells its model that "the user" rejected the call,
   even when the bridge policy rejected it.
@@ -208,6 +212,7 @@ Plugin options (use the object form in `plugins`):
       "provider": "devin",       // default provider ID
       "commands": true,          // default: Devin's slash commands as /devin:<name>
       "toolCards": false,        // default: true shows Devin's tool calls as OpenCode tool cards (experimental)
+      "nativePermissions": true, // default: Devin's permission prompts use OpenCode's own permission dialog
       "debug": false             // default: true runs the managed bridge with DEVIN_BRIDGE_DEBUG=1 (logs prompts)
       // "baseURL": "http://127.0.0.1:7317/v1"  — set only when you run the bridge yourself
     }
@@ -221,12 +226,26 @@ Devin decides first, using its own permission rules (`~/.config/devin/config.jso
 about calls those rules do not cover. In its default mode Devin edits files without asking and asks before
 shell commands and other tools.
 
-The bridge checks its policy file first. When no rule matches, it **asks you** in OpenCode's question picker:
-**Allow once**, **Always allow this command** or **Reject**. The prompt shows the command or paths, Devin's
-rule and why no policy rule allowed it. **Always allow this command** allows this call and adds an `allow`
-rule for that exact command to the policy file; it is offered only for a plain command without `*`. Any other
-answer rejects, and so does dismissing the picker, typing a new message or the timeout. If the agent does not
-allow OpenCode's `question` tool, the bridge rejects at once.
+The bridge checks its policy file first. When no rule matches, it **asks you** in OpenCode's own permission
+dialog, as for OpenCode's built-in tools: a shell command shows as **Shell command** with the command, an MCP
+tool as **Call tool** with its name.
+
+- **Allow once** allows this call.
+- **Always allow** allows this call and adds an `allow` rule for that exact command to the bridge policy file,
+  so the next identical command runs with no prompt. OpenCode offers it only for a plain command: a chained
+  command (`&&`, `|`, `;`, …) gets only **Allow once** and **Reject**.
+- **Reject** rejects the call and stops the reply, as for OpenCode's own tools. Devin's turn waits; your next
+  message cancels it and starts a new one.
+- `opencode --auto` (auto-accept) allows Devin's calls too.
+
+OpenCode's own `permission` rules do not allow Devin's calls: OpenCode's agents allow every action by default,
+so the plugin turns any `allow` for a Devin call into a prompt. A `deny` rule still denies. Put allow rules in
+the bridge policy file instead.
+
+With the plugin option `"nativePermissions": false`, the bridge asks in OpenCode's question picker instead:
+**Allow once**, **Always allow this command** or **Reject**, with the command, Devin's rule and why no policy
+rule allowed it. Dismissing the picker, typing a new message or the timeout rejects. If the agent does not
+allow OpenCode's `question` tool either, the bridge rejects at once.
 
 To skip the prompt for commands you trust or never want, create `~/.config/devin-acp-bridge/policy.json`:
 
@@ -261,8 +280,8 @@ match before the turn:
 | any other (for example `devin`) | `accept-edits` | Devin's default: edits apply, other tools ask; the policy file decides, then you. |
 
 Switching agents in the middle of a conversation changes the mode for the next turn. Leaving `devin-bypass`
-for any other agent ends `bypass` on the next turn. OpenCode's `--auto` flag has no effect on Devin: Devin
-runs its own tools, and the bridge asks through the `question` tool, which `--auto` does not answer.
+for any other agent ends `bypass` on the next turn. OpenCode's `--auto` flag allows the calls Devin asks about,
+but Devin still runs in `accept-edits` mode and the bridge policy file still rejects its `reject` rules.
 
 `devin-bypass` is opt-in: the bridge uses `bypass` only for an agent with that exact name. To use it, add a
 second agent next to `devin` and switch to it (Tab) only in a project where you accept that Devin runs shell
@@ -314,7 +333,7 @@ how many sessions the bridge holds, how many turns are running and how many wait
 | OpenCode reports a missing API key or the bridge returns 401 (manual mode) | OpenCode is not sending the bridge token. Use `"apiKey": "{file:~/.config/devin-acp-bridge/token}"` and run `opencode service restart`. If you set `DEVIN_BRIDGE_TOKEN` for the bridge, OpenCode needs the same value. |
 | `Error: Failed to start server. Is port 7317 in use?` (manual mode) | Another bridge is running. Stop it or set `DEVIN_BRIDGE_PORT`. |
 | Devin reads or edits the wrong directory (manual mode) | Set `X-Devin-Cwd` to the project's absolute path. Managed mode sets it per project. |
-| Every shell command is rejected with no prompt | The agent does not allow OpenCode's `question` tool, or you use `opencode run`, which cannot ask. Allow `question`, add an `allow` rule, or allow it in Devin's own config. |
+| Every shell command is rejected with no prompt | You use `opencode run`, which cannot ask, or the plugin is not loaded and the agent does not allow OpenCode's `question` tool. Add an `allow` rule to the bridge policy file, or allow it in Devin's own config. |
 | A second permission prompt appears right after the first | Devin asked for two permissions. The bridge asks them one at a time, in order. |
 | `Devin rejected thought_level …` | The variant names a level the model lacks and the bridge did not know the model's levels yet. Pick the model's default variant, or wait a minute and retry. |
 | No `/devin:` commands | The plugin reads them after the models; wait for the next refresh, or check `opencode-plugin.log`. `opencode run "/devin:…"` does not run commands; use the TUI. |
@@ -330,7 +349,8 @@ how many sessions the bridge holds, how many turns are running and how many wait
   same Devin session, which compacts its own context. To compact Devin's context now, use `/devin:compact`.
 - Editing, retrying or reverting a message moves the conversation to a new Devin session with the earlier
   turns replayed as text. Devin offers no way over ACP to fork or rewind a session.
-- Devin's plan shows as a checklist in the reply, not in a todo panel.
+- Devin's plan reaches the todo panel only with `"experimental": { "todo": true }`, an experimental OpenCode
+  option. Each plan change is one more OpenCode step.
 - Tool cards (`toolCards`) add one OpenCode step per Devin tool call. An agent step limit can end a long turn
   early.
 - Bridge sessions appear in Devin's own session list.

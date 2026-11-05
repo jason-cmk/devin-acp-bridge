@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import type { TurnEvent } from "./devin";
 import type { Delta } from "./openai";
-import { CardStore, cardToolCall, TurnRenderer } from "./render";
+import { CardStore, cardToolCall, todoToolCall, TurnRenderer } from "./render";
 
 const cwd = "/work/app";
 
@@ -224,5 +224,22 @@ describe("CardStore", () => {
     expect(store.get("a")).toBeUndefined();
     expect(store.get("b")?.title).toBe("b");
     expect(store.get("c")?.title).toBe("c");
+  });
+});
+
+describe("todo mode", () => {
+  test("queues each changed plan for the todo tool and renders no plan markdown", () => {
+    const renderer = new TurnRenderer(cwd, { todos: true });
+    const plan = { sessionUpdate: "plan", entries: [{ content: "Alpha", status: "in_progress", priority: "medium" }] } as SessionUpdate;
+    expect(renderer.handle({ kind: "update", update: plan })).toEqual([]);
+    expect(renderer.handle({ kind: "update", update: plan })).toEqual([]);
+    expect(renderer.takeTodos()).toEqual([{ content: "Alpha", status: "in_progress", priority: "medium" }]);
+    expect(renderer.takeTodos()).toBeUndefined();
+    expect(renderer.finish().map((delta) => delta.content ?? "").join("")).not.toContain("**Plan**");
+  });
+
+  test("todoToolCall sends content and status only", () => {
+    const call = todoToolCall("call_t", [{ content: "Alpha", status: "completed", priority: "high" }]);
+    expect(call.function).toEqual({ name: "todowrite", arguments: '{"todos":[{"content":"Alpha","status":"completed"}]}' });
   });
 });

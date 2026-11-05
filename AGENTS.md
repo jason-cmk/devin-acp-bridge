@@ -16,7 +16,8 @@ its OpenCode config, options table and troubleshooting in step with the code.
 - `src/questions.ts` — ACP `elicitation/create` form ↔ OpenCode `question` tool call and answer text.
 - `src/modes.ts` — OpenCode agent (`x-opencode-agent`) → Devin session mode (`build` → `accept-edits`, `plan` → `plan`,
   `devin-bypass` → `bypass`).
-- `src/permissions.ts` — policy file, permission decisions, the permission prompt text and "Always allow" rules.
+- `src/permissions.ts` — policy file, permission decisions, the permission prompt text, "Always allow" rules
+  and the native permission check sent to the plugin's `devin_permission` tool.
 - `src/titles.ts` — Devin's session title for OpenCode's title request.
 - `src/commands.ts` — Devin slash commands exposed as `/devin:<name>`.
 - `src/models.ts` — Devin model catalog from ACP config options; exclude filter.
@@ -73,7 +74,9 @@ DEVIN_BRIDGE_TOKEN=e2e-token opencode --standalone run --format json "<prompt>"
 DEVIN_BRIDGE_TOKEN=e2e-token opencode --standalone run --format json --continue "<follow-up>"
 ```
 
-`--standalone` keeps the user's OpenCode background service out of the test. An agent's shell tool may stop
+`--standalone` keeps the user's OpenCode background service out of the test. The user's global config may also load this plugin;
+set `HOME` to an empty directory for the OpenCode process to keep it out. For TUI checks, run the bridge and
+`opencode --standalone` in tmux windows and read the screen with `tmux capture-pane`. An agent's shell tool may stop
 background processes when its call ends; start the bridge, run the test and stop the bridge in one command. Each run is a billed Devin turn;
 keep prompts small and tell Devin not to use tools unless the test needs them. `e2e/scratch.txt` is a
 gitignored file for edit tests.

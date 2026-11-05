@@ -317,6 +317,7 @@ new child and a new Devin session with the transcript (§6.2).
 | `POST` | `/v1/chat/completions` | Streaming (SSE). Non-streaming requests: buffer the same output and return one completion. |
 | `GET` | `/v1/commands` | Devin's slash commands for the `X-Devin-Cwd` project (§6.15): `{ data: [{ name, description, hint? }] }`. |
 | `POST` | `/v1/steer` | `{ session, text }` from the plugin (§6.14): `{ steered: true }` or `{ steered: false, reason }`. |
+| `GET` | `/v1/permissions/<callId>` | `{ title, action, resources, save, chained }` of a native permission check the bridge sent (§6.17), for the plugin's `devin_permission` tool; 404 if unknown. |
 | `GET` | `/v1/cards/<callId>` | `{ title, output }` of a tool card the bridge sent (§6.16), for the plugin's `devin` tool; 404 if unknown. |
 | `GET` | `/healthz` | `{ status, pid, build, devin: "running" \| "stopped", sessions, busy, waitingForAnswer }`. No auth. No session content. |
 
@@ -412,8 +413,9 @@ server plugin, `opencode-plugin/index.ts`.
   left as it is and the reply says the rule was not saved). `Reject`, custom text, a dismissal, a new message
   and the timeout all send the policy's reject response. The reply gets `> **Permission** allowed by you` or
   `rejected by you`, and for `Always` a line that the rule was added.
-- **Fallback.** If the request did not offer the `question` tool, the bridge rejects at once with the usual
-  policy line. A second question or permission that arrives while the turn is paused waits in order and is
+- **Native check first.** When the request offers the plugin's `devin_permission` tool, the bridge asks through
+  OpenCode's own permission system instead (§6.17); this section is then the fallback.
+- **Fallback.** If the request offered neither tool, the bridge rejects at once with the usual policy line. A second question or permission that arrives while the turn is paused waits in order and is
   asked in the next response (`Turn` output queue).
 - **Timeout** is `DEVIN_BRIDGE_QUESTION_TIMEOUT_MS`, shared with questions.
 
@@ -461,6 +463,42 @@ server plugin, `opencode-plugin/index.ts`.
 - **Cost.** Each finished Devin tool is one more OpenCode step and one localhost round trip. An agent step
   limit can end OpenCode's loop early; the parked turn is then cancelled at the question timeout.
 
+### 6.17 Native permission prompts
+
+- **Plugin option `nativePermissions`** (default on). The plugin registers `devin_permission` (`codemode:
+  false`). The bridge pauses as for a question (§6.13) but ends the response with a `devin_permission` call whose
+  input is `{ title }` only, and keeps the check by call ID (`/v1/permissions/<callId>`).
+- **Check** (`nativePermission`). A shell command → action `bash`, resources `[command]`, `save` `[command]`, or
+  `[]` for a chained command. An MCP rule → action `<rule>` (for example `mcp__slack__slack_read_channel`),
+  resources and save `["*"]`. Anything else → `devin-other`, `[rule or title]`, no save. OpenCode's dialog draws
+  `bash` as "Shell command" with the command and any other action as "Call tool <action>" (§11.22). OpenCode's
+  `shell` action is never used, so the `devin` agent's `shell` deny does not block Devin.
+- **Plugin `execute`.** Reads the check by `context.id`, then `ctx.permission.assert({ action, resources, save,
+  metadata: { devinBridge: true, … }, source: { type: "tool", … } })`. Allowed → result `ALLOWED`, or
+  `ALLOWED_ALWAYS` when the `permission.replied` event for this call says `always` (the plugin maps
+  `permission.asked` request IDs to call IDs and waits up to 1 s for the reply). A rejection rethrows, so
+  OpenCode ends the step as for its own tools.
+- **No allow from rules.** OpenCode's agents start with `* allow`, so an unmatched action is allowed. The plugin's
+  `evaluate` hook turns `allow` into `ask` for checks with `devinBridge: true`; `deny` stays. Allow rules belong
+  in the bridge policy file. A plugin `agent.transform` could not insert a rule instead: config agents such as
+  `devin` are not in its list.
+- **Bridge answer** (`nativePermissionAnswer`). `ALLOWED` → allow once; `ALLOWED_ALWAYS` → allow once and append
+  the exact-command rule to the policy file when `alwaysAllowRule` gives one; anything else, including an error
+  result, rejects. A rejection ends OpenCode's step without a result, so the turn stays parked; the next message
+  abandons it (reject, cancel), or the timeout does.
+- **Auto-accept.** `opencode --auto` answers the `ask`, so Devin's calls run with no dialog.
+
+### 6.18 Devin's plan as OpenCode todos
+
+- **OpenCode.** `experimental.todo: true` adds OpenCode's `todowrite` tool (input `{ todos: [{ content, status }] }`,
+  status `pending | in_progress | completed | cancelled`). OpenCode draws the call as a `# Todos` block and fills
+  the sidebar's Todo panel from the latest call.
+- **Bridge.** When the request offers `todowrite`, `TurnRenderer` queues each changed plan (`takeTodos`) instead of
+  rendering the markdown checklist. The turn ends the response with one `todowrite` call per change; OpenCode
+  runs its own tool, and the request that carries its result resumes the turn, as for cards. A later request
+  without the tool gets the plan as markdown.
+- **Cost.** Each plan change is one more OpenCode step.
+
 ## 7. Known side effects in OpenCode
 
 | Behaviour | Effect | Mitigation for the demo |
@@ -470,7 +508,7 @@ server plugin, `opencode-plugin/index.ts`.
 | Undo/revert in OpenCode | Reverts the transcript and Devin's edits in the worktree: OpenCode snapshots the worktree around each step (§11.15). Gitignored files are not in the snapshot. The next message replays the shortened transcript into a new Devin session. | None needed. |
 | OpenCode `/compact` (§11.19) | Would cost one or two Devin turns and move the conversation to a new Devin session that sees only OpenCode's summary. | The bridge answers the compaction prompt locally and keeps the same Devin session. Devin compacts its own context; `/devin:compact` forces it. |
 | Editing or retrying a message | Starts a new Devin session with a text transcript; Devin's tool state is lost. | No ACP fork or rewind exists (§11.14). |
-| OpenCode's own tools/permissions | Sent to the bridge but not used, except `question` (§6.12, §6.13) and the `devin` card tool (§6.16). | Bridge ignores the other `tools`; agent denies edit/shell as a safety net. |
+| OpenCode's own tools/permissions | Sent to the bridge but not used, except `question` (§6.12, §6.13), `todowrite` (§6.18) and the plugin's `devin` and `devin_permission` tools (§6.16, §6.17). | Bridge ignores the other `tools`; agent denies edit/shell as a safety net. |
 
 ## 8. Milestones
 
@@ -492,12 +530,14 @@ server plugin, `opencode-plugin/index.ts`.
 | M13 | **Done 2026-11-05.** Opt-in `devin-bypass` agent → Devin `bypass` mode (§6.11). | Unit test. |
 | M14 | **Done 2026-11-05.** Tool cards readable in the TUI (§6.16): the card tool is `devin`, its input is the title only, and the plugin reads the output from the bridge by call ID. | Unit tests; TUI in tmux against real Devin, collapsed and expanded (§11.20). |
 | M15 | **Done 2026-11-05.** Cache reads in `usage` (§6.4): Devin's `cachedReadTokens` → `prompt_tokens_details.cached_tokens`. | Unit tests; `opencode run` showed `cache.read` (§11.21). |
+| M16 | **Done 2026-11-05.** Native permission prompts (§6.17): OpenCode's own permission dialog, "Always" saves a bridge policy rule, `--auto` works. | Unit tests; TUI in tmux against real Devin: allow once, reject, always (repeat ran with no prompt), chained command offered no "Always", `--auto` (§11.22). |
+| M17 | **Done 2026-11-05.** Devin's plan as OpenCode todos (§6.18) with `experimental.todo`. | Unit tests; TUI in tmux: `# Todos` block and sidebar Todo panel, updated on a second turn (§11.22). |
 
 ## 9. Test plan
 
-- **Unit (bun test, 180 tests):** elicitation ↔ question mapping, answer parsing and tool-result lookup
+- **Unit (bun test, 193 tests):** elicitation ↔ question mapping, answer parsing and tool-result lookup
   (`questions.test.ts`); turn pause, buffering, resume, question fallback, permission prompts, `Always allow`,
-  steering, cards and the output queue (`turn.test.ts`); askable decisions, prompt text, allow-once response,
+  steering, cards, todos, native permission checks and the output queue (`turn.test.ts`); askable decisions, prompt text, allow-once response,
   always-allow rule and policy append (`permissions.test.ts`); model catalog, exclude filter, thought levels
   and the `default` variant (`models.test.ts`); Devin title and title board (`titles.test.ts`); command filter
   and prompt (`commands.test.ts`); session keys, history check, transcript, images and OpenCode harness messages (`sessions.test.ts`); image parts, title
@@ -529,8 +569,7 @@ server plugin, `opencode-plugin/index.ts`.
    client support upstream with reference to anomalyco/opencode#28991. §6.16 gives generic cards without it.
 7. Should tool cards become the default? Needs the user's view of the TUI cards and of OpenCode's agent step
    limit in long turns.
-8. Todo panel: the OpenCode 2.2 build in use offers no todo tool (no `todowrite` in any captured `tools`
-   list), so Devin's plan stays a markdown checklist.
+8. ~~Todo panel~~ **Done** in §6.18: `todowrite` exists behind `experimental.todo` (§11.22).
 
 ## 11. Findings
 
@@ -928,6 +967,26 @@ Run in tmux: the e2e bridge, `opencode --standalone` in `e2e/` with `toolCards: 
 - After (`opencode run` in `e2e/`, one turn): `tokens` = `{ input: 63536, output: 4, cache: { read: 23570,
   write: 0 } }`.
 - The non-streamed response now uses the same `openAiUsage` mapping as the streamed usage chunk.
+
+### 11.22 Native permissions and todos (2026-11-05)
+
+Run in tmux: the e2e bridge and `opencode --standalone` in `e2e/` with `HOME` set to an empty directory, so the
+user's global config (which also loads this plugin, in managed mode) stayed out of the test.
+
+- Plugin API: `ctx.permission.assert` evaluates the session's rules, shows OpenCode's dialog and waits; the
+  `evaluate` hook can change the effect; `permission.asked` (with `source.id`) and `permission.replied`
+  (`once | always | reject`) events are available. The plugin cannot list saved approvals.
+- OpenCode's evaluation is `findLast` over the agent's rules, default `ask`; every built-in agent's list starts
+  with `{ action: "*", effect: "allow" }`. So `devin-shell` was allowed with no dialog until the `evaluate` hook
+  turned `allow` into `ask`. The plugin's `agent.transform` saw only the 7 built-in agents, not `devin`.
+- The dialog (`VF` in the binary) draws `bash`/`shell` as "Shell command" plus the resources, and any unknown
+  action as "Call tool <action> / Tool: <action>". The agent's `shell` deny did not match action `bash`.
+- Results, real Devin: Allow once → file created; Reject → ✗ card, step "interrupted", no file; Always → rule
+  `{ "command": "touch …native7", "decision": "allow" }` appended, and the repeat ran with "Permission allowed"
+  and no dialog; chained `touch a && touch b` → dialog with only Allow once / Reject; `opencode --auto` → no
+  dialog, file created.
+- `experimental.todo` is in `ConfigExperimental` ("Enable the experimental todowrite tool"). A three-item plan
+  showed as `# Todos` in the chat and in the sidebar's Todo panel; a second turn updated both.
 
 ## 12. References
 
