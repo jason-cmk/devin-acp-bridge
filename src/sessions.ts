@@ -6,7 +6,43 @@ type Entry = { sessionId: string; userTurns: number };
 export type SessionPlan =
   | { action: "reuse"; sessionId: string; prompt: string }
   | { action: "create"; prompt: string }
+  | { action: "compact"; sessionId?: string }
   | { action: "skip" };
+
+/** OpenCode's compaction prompt, and the follow-up it sends when a reply misses the template. */
+const COMPACTION_PROMPT = /^\s*(You MUST summarize the conversation above into a structured summary|The previous response did not fill in the required summary template)/;
+
+export function isCompactionRequest(request: ChatRequest): boolean {
+  return COMPACTION_PROMPT.test(latestUserText(request));
+}
+
+/**
+ * The bridge's answer to OpenCode's compaction prompt, in OpenCode's template. Devin keeps the whole
+ * conversation in its own session and compacts it itself, so no Devin turn is needed.
+ */
+export function compactionSummary(sessionId?: string): string {
+  const where = sessionId ? `Devin session \`${sessionId}\`` : "Devin's own session";
+  const none = (heading: string) => [heading, "- (none)", ""];
+  return [
+    "## Objective",
+    `- Continue the conversation that ${where} holds.`,
+    "",
+    ...none("## Requirements"),
+    ...none("## Decisions"),
+    "## Work State",
+    ...none("### Completed"),
+    ...none("### Active"),
+    ...none("### Blocked"),
+    "## Next Move",
+    "1. (none)",
+    "",
+    ...none("## Relevant Files"),
+    "## Important Context",
+    `- The devin-acp-bridge answered this compaction locally. ${where} keeps the full conversation and compacts its own context; the bridge continues it with the next message.`,
+    "- To compact Devin's context now, run `/devin:compact`.",
+    "",
+  ].join("\n");
+}
 
 const HARNESS_ONLY = /^\s*<(system-[a-z-]+)>[\s\S]*<\/\1>\s*$/;
 
@@ -76,8 +112,14 @@ export class SessionStore {
 
   plan(key: string, request: ChatRequest): SessionPlan {
     if (onlyHarnessSinceReply(request)) return { action: "skip" };
-    const turns = userTurns(request);
     const entry = this.entries.get(key);
+    if (isCompactionRequest(request)) {
+      // After compaction OpenCode sends [checkpoint summary, next message]: the checkpoint counts as turn 1, so
+      // the next message continues the same Devin session.
+      if (entry) entry.userTurns = 1;
+      return entry ? { action: "compact", sessionId: entry.sessionId } : { action: "compact" };
+    }
+    const turns = userTurns(request);
     if (entry && turns === entry.userTurns + 1) return { action: "reuse", sessionId: entry.sessionId, prompt: latestUserText(request) };
     return { action: "create", prompt: turns > 1 ? transcriptPrompt(request) : latestUserText(request) };
   }

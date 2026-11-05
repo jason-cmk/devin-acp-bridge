@@ -453,6 +453,7 @@ server plugin, `opencode-plugin/index.ts`.
 | OpenCode generates session titles with a model call to the same model, in the same session (verified in M0) | Would start a second Devin turn per session. | Bridge detects the title request and answers with Devin's own title, or the first five words of the user's first message (§6.2). Detection: the system message starts with `You name conversations` **and** the request has no `tools`. |
 | Context-usage indicator | Shows Devin's input tokens for the last turn against the configured `limit.context`. | Keep `limit.context` at Devin's context size (1,000,000 reported by `usage_update.size`) and `compaction.auto: false`. |
 | Undo/revert in OpenCode | Reverts the transcript and Devin's edits in the worktree: OpenCode snapshots the worktree around each step (§11.15). Gitignored files are not in the snapshot. The next message replays the shortened transcript into a new Devin session. | None needed. |
+| OpenCode `/compact` (§11.19) | Would cost one or two Devin turns and move the conversation to a new Devin session that sees only OpenCode's summary. | The bridge answers the compaction prompt locally and keeps the same Devin session. Devin compacts its own context; `/devin:compact` forces it. |
 | Editing or retrying a message | Starts a new Devin session with a text transcript; Devin's tool state is lost. | No ACP fork or rewind exists (§11.14). |
 | OpenCode's own tools/permissions | Sent to the bridge but not used, except `question` (§6.12, §6.13) and `devin_tool` (§6.16). | Bridge ignores the other `tools`; agent denies edit/shell as a safety net. |
 
@@ -475,7 +476,7 @@ server plugin, `opencode-plugin/index.ts`.
 
 ## 9. Test plan
 
-- **Unit (bun test, 168 tests):** elicitation ↔ question mapping, answer parsing and tool-result lookup
+- **Unit (bun test, 172 tests):** elicitation ↔ question mapping, answer parsing and tool-result lookup
   (`questions.test.ts`); turn pause, buffering, resume, question fallback, permission prompts, `Always allow`,
   steering, cards and the output queue (`turn.test.ts`); askable decisions, prompt text, allow-once response,
   always-allow rule and policy append (`permissions.test.ts`); model catalog, exclude filter, thought levels
@@ -501,8 +502,8 @@ server plugin, `opencode-plugin/index.ts`.
 2. ~~Does OpenCode show `reasoning_content` deltas?~~ **Yes**, with `compatibility.reasoningField`.
 3. ~~Can project-level config set provider `headers`?~~ **Yes.** `X-Devin-Cwd` arrived.
 4. ~~Which other requests does OpenCode make?~~ **Title generation** on the first turn. No summary or warming
-   requests in M0 (warming is off by default; auto-compaction is off in the sandbox config). Not yet observed:
-   manual `/compact`, subagent calls.
+   requests in M0 (warming is off by default; auto-compaction is off in the sandbox config). Manual `/compact`
+   and subagents: §11.19.
 5. ~~Is an interactive permission prompt worth a follow-up?~~ **Done** in §6.13, through the same `question`
    tool as §6.12.
 6. After the demo: upgrade to a real OpenCode provider package (§3) to get native tool cards, or propose ACP
@@ -850,6 +851,32 @@ the billed turns ran the bridge with the real `HOME` in manual mode on port 7318
   permission request for `-a`, but the permission request for `-b` came only after `-a` completed. So with
   parallel shell calls the bridge never holds two prompts at once; the ordering fix matters when other pauses
   (questions, tool cards) are queued behind a prompt.
+
+### 11.19 Compaction and subagents (2026-11-05)
+
+Captured with the M0 stub (`STUB_PORT=7318`) and `opencode serve` in `e2e/`, using `POST
+/api/session/<id>/compact`. The stub now fills OpenCode's template so the request after compaction can be seen.
+
+- The compaction request is an ordinary chat request with `tools` (22), the full history, and a last user
+  message `You MUST summarize the conversation above into a structured summary …` with a `<template>` of
+  `## Objective`, `## Requirements`, `## Decisions`, `## Work State` (`### Completed`/`Active`/`Blocked`),
+  `## Next Move`, `## Relevant Files`, `## Important Context`. A reply without the template gets one retry:
+  `The previous response did not fill in the required summary template. …`.
+- After compaction, OpenCode sends `[user: <conversation-checkpoint><summary>…</summary></conversation-checkpoint>,
+  user: <next message>]` with no assistant turn and the same `x-opencode-session`.
+- Before: the summary prompt went to Devin as the next turn (billed, plus a billed retry if Devin missed the
+  template), and the post-compaction request did not add exactly one user turn, so the bridge moved the
+  conversation to a new Devin session seeded with only OpenCode's summary.
+- Change (`sessions.ts`, `server.ts`): `SessionStore.plan` returns `compact` for either prompt. The bridge
+  answers with a filled template (`compactionSummary`) that names the Devin session, and sets the entry's user
+  turn count to 1, so the checkpoint counts as turn 1 and the next message reuses the same Devin session.
+- Real Devin through `opencode serve`: "Remember the word PINEAPPLE" → `OK`; `/compact` → OpenCode recorded a
+  compaction with no retry and no Devin turn; "Which word …?" → `PINEAPPLE`. The bridge summary does not contain
+  the word, so the answer came from the same Devin session.
+- Subagents: `@general …` sent as API text is a plain user message. OpenCode starts a subagent only when the
+  model calls its `subagent` tool, and Devin never calls OpenCode tools. A `devin/*` model can still run as a
+  subagent of another primary model; that request arrives with the child session's `x-opencode-session` and
+  becomes a new Devin session. Not tested.
 
 ## 12. References
 

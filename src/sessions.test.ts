@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ChatRequest } from "./openai";
-import { latestUserImages, SessionStore, sessionKey, transcriptPrompt } from "./sessions";
+import { compactionSummary, latestUserImages, SessionStore, sessionKey, transcriptPrompt } from "./sessions";
 
 describe("latestUserImages", () => {
   test("takes images from the newest non-harness user message only", () => {
@@ -60,6 +60,42 @@ describe("SessionStore", () => {
   test("starts a fresh session with the transcript when the bridge has no entry for a later turn", () => {
     const request = conversation("hi", "hello", "next");
     expect(new SessionStore().plan("k", request)).toEqual({ action: "create", prompt: transcriptPrompt(request) });
+  });
+});
+
+describe("OpenCode compaction", () => {
+  const COMPACT = "You MUST summarize the conversation above into a structured summary that will be given to another agent.";
+  const CHECKPOINT = "<conversation-checkpoint>\n<summary>\n## Objective\n- x\n</summary>\n</conversation-checkpoint>";
+  /** What OpenCode sends after compaction: the checkpoint and the next message, both as user messages. */
+  const afterCompaction = (next: string): ChatRequest => ({
+    messages: [{ role: "system", content: "harness prompt" }, { role: "user", content: CHECKPOINT }, { role: "user", content: next }],
+  });
+
+  test("answers the compaction prompt locally and continues the same Devin session afterwards", () => {
+    const store = new SessionStore();
+    store.record("k", "devin-1", conversation("hi", "hello", "more"));
+    expect(store.plan("k", conversation("hi", "hello", "more", "ok", COMPACT))).toEqual({ action: "compact", sessionId: "devin-1" });
+    expect(store.plan("k", afterCompaction("next"))).toEqual({ action: "reuse", sessionId: "devin-1", prompt: "next" });
+  });
+
+  test("detects OpenCode's retry prompt for a reply that missed the template", () => {
+    const store = new SessionStore();
+    const retry = "The previous response did not fill in the required summary template. Do not call tools.";
+    expect(store.plan("k", conversation("hi", "hello", COMPACT, "bad", retry))).toEqual({ action: "compact" });
+  });
+
+  test("replays the checkpoint into a fresh session when the bridge has no entry", () => {
+    const store = new SessionStore();
+    const after = afterCompaction("next");
+    expect(store.plan("k", after)).toEqual({ action: "create", prompt: transcriptPrompt(after) });
+  });
+
+  test("the summary uses every heading of OpenCode's template and names the Devin session", () => {
+    const summary = compactionSummary("devin-1");
+    for (const heading of ["## Objective", "## Requirements", "## Decisions", "## Work State", "### Completed", "### Active", "### Blocked", "## Next Move", "## Relevant Files", "## Important Context"]) {
+      expect(summary).toContain(`${heading}\n`);
+    }
+    expect(summary).toContain("`devin-1`");
   });
 });
 

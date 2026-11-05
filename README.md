@@ -307,6 +307,8 @@ how many sessions the bridge holds, how many turns are running and how many wait
 
 - Undo and revert in OpenCode also revert Devin's file edits, because OpenCode snapshots the worktree around
   each reply. Gitignored files are not in the snapshot.
+- OpenCode's `/compact` costs no Devin turn: the bridge answers OpenCode's summary request itself and keeps the
+  same Devin session, which compacts its own context. To compact Devin's context now, use `/devin:compact`.
 - Editing, retrying or reverting a message moves the conversation to a new Devin session with the earlier
   turns replayed as text. Devin offers no way over ACP to fork or rewind a session.
 - Devin's plan shows as a checklist in the reply, not in a todo panel.

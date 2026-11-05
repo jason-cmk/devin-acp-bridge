@@ -23,7 +23,7 @@ import { DEFAULT_MODEL_ID, THOUGHT_HEADER, thoughtLevelFor, thoughtLevels, type 
 import { defaultPolicyPath } from "./permissions";
 import { parseAnswers, QUESTION_TOOL, questionToolCall, toolResultText } from "./questions";
 import { CARD_TOOL, cardToolCall, TurnRenderer, type TurnUsage } from "./render";
-import { latestUserImages, latestUserText, SessionStore, sessionKey } from "./sessions";
+import { compactionSummary, latestUserImages, latestUserText, SessionStore, sessionKey } from "./sessions";
 import { devinTitle, TitleBoard } from "./titles";
 import { Turn, type TurnStep } from "./turn";
 
@@ -239,6 +239,7 @@ async function chatResponse(request: Request, body: ChatRequest): Promise<Respon
   const plan = sessions.plan(key, body);
   debugLog("chat/request", { key, plan: plan.action, model, thought: request.headers.get(THOUGHT_HEADER), messages: body.messages?.map((message) => ({ role: message.role, text: messageText(message) })) });
   if (plan.action === "skip") return localResponse(body, "");
+  if (plan.action === "compact") return localResponse(body, compactionSummary(plan.sessionId));
   if (!plan.prompt) return errorResponse(400, "No user message to send to Devin.");
 
   let sessionId: string;
