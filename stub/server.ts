@@ -21,6 +21,41 @@ private static int Add(int a, int b)
 \`\`\`
 `;
 
+// A filled-in OpenCode compaction template, so a stub capture can show what OpenCode sends after compaction.
+const cannedSummary = `## Objective
+- Stub summary for capture tests.
+
+## Requirements
+- (none)
+
+## Decisions
+- (none)
+
+## Work State
+### Completed
+- (none)
+
+### Active
+- (none)
+
+### Blocked
+- (none)
+
+## Next Move
+1. (none)
+
+## Relevant Files
+- (none)
+
+## Important Context
+- (none)
+`;
+const isCompaction = (body: any) => {
+  const last = [...(body?.messages ?? [])].reverse().find((message: any) => message.role === "user");
+  const text = typeof last?.content === "string" ? last.content : (last?.content ?? []).map((part: any) => part.text ?? "").join(" ");
+  return /^You MUST summarize the conversation above|did not fill in the required summary template/.test(text);
+};
+
 let sequence = 0;
 
 function redactHeaders(headers: Headers): Record<string, string> {
@@ -58,15 +93,15 @@ function chunk(model: string, delta: object, finishReason: string | null = null)
   })}\n\n`;
 }
 
-function streamReply(model: string, includeUsage: boolean): Response {
+function streamReply(model: string, includeUsage: boolean, reply = cannedReply): Response {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
       const send = (text: string) => controller.enqueue(encoder.encode(text));
       send(chunk(model, { role: "assistant", content: "" }));
       send(chunk(model, { reasoning_content: cannedReasoning }));
-      for (let i = 0; i < cannedReply.length; i += 24) {
-        send(chunk(model, { content: cannedReply.slice(i, i + 24) }));
+      for (let i = 0; i < reply.length; i += 24) {
+        send(chunk(model, { content: reply.slice(i, i + 24) }));
         await Bun.sleep(15);
       }
       send(chunk(model, {}, "stop"));
@@ -129,7 +164,8 @@ Bun.serve({
     }
     if (request.method === "POST" && url.pathname === "/v1/chat/completions") {
       const model = body?.model ?? "devin";
-      return body?.stream ? streamReply(model, Boolean(body?.stream_options?.include_usage)) : fullReply(model);
+      const reply = isCompaction(body) ? cannedSummary : cannedReply;
+      return body?.stream ? streamReply(model, Boolean(body?.stream_options?.include_usage), reply) : fullReply(model);
     }
     return new Response("Not found", { status: 404 });
   },
