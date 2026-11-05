@@ -53,6 +53,21 @@ async function fetchModels(baseURL: string, token: string): Promise<DevinModel[]
   });
 }
 
+/** The card output that the bridge stored for this call ID; a note instead when the bridge does not have it. */
+async function cardOutput(baseURL: string | undefined, callId: string): Promise<string> {
+  if (!baseURL) return "(output unavailable: the bridge is not running)";
+  try {
+    const response = await fetch(`${baseURL}/cards/${encodeURIComponent(callId)}`, {
+      headers: { authorization: `Bearer ${resolveToken().value}` },
+    });
+    if (!response.ok) return `(output unavailable: bridge returned ${response.status})`;
+    const card = (await response.json()) as { output?: unknown };
+    return typeof card.output === "string" && card.output ? card.output : "(no output)";
+  } catch (error) {
+    return `(output unavailable: ${(error as Error).message})`;
+  }
+}
+
 async function fetchCommands(baseURL: string, token: string, cwd: string): Promise<DevinCommand[]> {
   const response = await fetch(`${baseURL}/commands`, {
     headers: { authorization: `Bearer ${token}`, "x-devin-cwd": cwd },
@@ -106,8 +121,9 @@ export default Plugin.define({
       });
     }
 
-    // Tool cards (opt-in, spec §6.16): the bridge ends a response with a `devin_tool` call for each tool Devin has
-    // already run, and this tool only returns that result so OpenCode draws a tool card.
+    // Tool cards (opt-in, spec §6.16): the bridge ends a response with a `devin` call for each tool Devin has
+    // already run. The call carries only the title, because OpenCode's TUI shows the input in the card header;
+    // this tool reads the output from the bridge by call ID, so OpenCode shows it when the card is expanded.
     if (withCards) {
       await ctx.tool.transform((editor) => {
         editor.add({
@@ -115,16 +131,13 @@ export default Plugin.define({
           description: "Shows a tool call that Devin already ran. It has no effect; never call it yourself.",
           input: {
             type: "object",
-            properties: { title: { type: "string" }, output: { type: "string" } },
+            properties: { title: { type: "string" } },
             required: ["title"],
           },
           options: { codemode: false },
-          execute: async (input) => {
-            const card = (input ?? {}) as { title?: unknown; output?: unknown };
-            return {
-              content: typeof card.output === "string" && card.output ? card.output : "(no output)",
-              metadata: { title: typeof card.title === "string" ? card.title : CARD_TOOL },
-            };
+          execute: async (input, context) => {
+            const title = typeof (input as { title?: unknown } | undefined)?.title === "string" ? (input as { title: string }).title : CARD_TOOL;
+            return { content: await cardOutput(baseURL, context.id), metadata: { title } };
           },
         });
       });

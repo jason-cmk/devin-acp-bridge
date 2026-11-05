@@ -21,13 +21,36 @@ type ToolState = {
 
 /** `promptTokens` includes `cachedTokens`, as OpenAI's `prompt_tokens` includes `cached_tokens`. */
 export type TurnUsage = { promptTokens: number; completionTokens: number; cachedTokens?: number };
-/** A finished Devin tool call, shown with the plugin's `devin_tool` in an OpenCode tool card (§6.16). */
+/** A finished Devin tool call, shown with the plugin's `devin` tool in an OpenCode tool card (§6.16). */
 export type ToolCard = { title: string; output: string };
-/** The plugin registers this tool; its `execute` only returns the card's output (opencode-plugin/index.ts). */
-export const CARD_TOOL = "devin_tool";
+/**
+ * The plugin registers this tool. OpenCode's TUI draws an unknown tool as `<name> [key=value, …]` from the tool
+ * input, so the input carries only the title. The tool's `execute` reads the output from the bridge by call ID.
+ */
+export const CARD_TOOL = "devin";
 
 export function cardToolCall(callId: string, card: ToolCard): ToolCall {
-  return { id: callId, type: "function", function: { name: CARD_TOOL, arguments: JSON.stringify(card) } };
+  return { id: callId, type: "function", function: { name: CARD_TOOL, arguments: JSON.stringify({ title: card.title }) } };
+}
+
+/** Cards by call ID, for the plugin's `execute`. Keeps the newest `limit` cards. */
+export class CardStore {
+  private readonly cards = new Map<string, ToolCard>();
+
+  constructor(private readonly limit = 500) {}
+
+  put(callId: string, card: ToolCard): void {
+    this.cards.delete(callId);
+    this.cards.set(callId, card);
+    for (const oldest of this.cards.keys()) {
+      if (this.cards.size <= this.limit) break;
+      this.cards.delete(oldest);
+    }
+  }
+
+  get(callId: string): ToolCard | undefined {
+    return this.cards.get(callId);
+  }
 }
 const MAX_CARD_LINES = 200;
 

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import type { TurnEvent } from "./devin";
 import type { Delta } from "./openai";
-import { TurnRenderer } from "./render";
+import { CardStore, cardToolCall, TurnRenderer } from "./render";
 
 const cwd = "/work/app";
 
@@ -198,5 +198,31 @@ describe("TurnRenderer with tool cards", () => {
     const renderer = new TurnRenderer(cwd, { cards: true });
     renderer.handle(update({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Read file", kind: "read" }));
     expect(renderer.finish().map((delta) => delta.content).join("")).toBe("> **Read file**\n\n");
+  });
+});
+
+describe("cardToolCall", () => {
+  test("sends only the title, so OpenCode's card header shows the title and not the output", () => {
+    const call = cardToolCall("call_1", { title: "Run git status", output: "M a.ts" });
+    expect(call).toEqual({ id: "call_1", type: "function", function: { name: "devin", arguments: '{"title":"Run git status"}' } });
+  });
+});
+
+describe("CardStore", () => {
+  test("returns a card by call ID", () => {
+    const store = new CardStore();
+    store.put("call_1", { title: "Read file", output: "x" });
+    expect(store.get("call_1")).toEqual({ title: "Read file", output: "x" });
+    expect(store.get("call_2")).toBeUndefined();
+  });
+
+  test("keeps only the newest cards", () => {
+    const store = new CardStore(2);
+    store.put("a", { title: "a", output: "" });
+    store.put("b", { title: "b", output: "" });
+    store.put("c", { title: "c", output: "" });
+    expect(store.get("a")).toBeUndefined();
+    expect(store.get("b")?.title).toBe("b");
+    expect(store.get("c")?.title).toBe("c");
   });
 });

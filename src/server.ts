@@ -23,7 +23,7 @@ import { AGENT_HEADER, devinModeFor } from "./modes";
 import { DEFAULT_MODEL_ID, THOUGHT_HEADER, thoughtLevelFor, thoughtLevels, type DevinModel, type ModelCatalog, type ThoughtLevels } from "./models";
 import { defaultPolicyPath } from "./permissions";
 import { parseAnswers, QUESTION_TOOL, questionToolCall, toolResultText } from "./questions";
-import { CARD_TOOL, cardToolCall, TurnRenderer } from "./render";
+import { CARD_TOOL, CardStore, cardToolCall, TurnRenderer } from "./render";
 import { compactionSummary, latestUserImages, latestUserText, SessionStore, sessionKey } from "./sessions";
 import { devinTitle, TitleBoard } from "./titles";
 import { Turn, type TurnStep } from "./turn";
@@ -72,6 +72,8 @@ const parkedTurns = new Map<string, ParkedTurn>();
 const liveTurns = new Map<string, { turn: Turn; sessionId: string }>();
 /** Steer text sent to Devin, waiting for the turn's response to end. */
 const pendingSteers = new Map<string, string>();
+/** Card output for the plugin's `devin` tool, by call ID (§6.16). */
+const cards = new CardStore();
 let catalog: { value: Promise<ModelCatalog>; fetchedAt: number } | undefined;
 
 devin.onExit(() => {
@@ -310,10 +312,13 @@ async function steerResponse(body: { session?: unknown; text?: unknown } | null)
   return Response.json({ steered: true });
 }
 
-/** The tool call a paused response ends with: OpenCode's `question`, or the plugin's `devin_tool` card. */
+/** The tool call a paused response ends with: OpenCode's `question`, or the plugin's `devin` card tool. */
 function pauseCall(step: TurnStep): ToolCall | undefined {
   if (step.kind === "question") return questionToolCall(step.question.callId, step.question.form);
-  if (step.kind === "card") return cardToolCall(step.callId, step.card);
+  if (step.kind === "card") {
+    cards.put(step.callId, step.card);
+    return cardToolCall(step.callId, step.card);
+  }
   return undefined;
 }
 
@@ -436,6 +441,10 @@ const server = Bun.serve({
       } catch (error) {
         return errorResponse(502, `Could not read Devin's commands: ${(error as Error).message}`);
       }
+    }
+    if (request.method === "GET" && url.pathname.startsWith("/v1/cards/")) {
+      const card = cards.get(decodeURIComponent(url.pathname.slice("/v1/cards/".length)));
+      return card ? Response.json(card) : errorResponse(404, "No card with this call ID.");
     }
     if (request.method === "POST" && url.pathname === "/v1/steer") {
       return steerResponse((await request.json().catch(() => null)) as { session?: unknown; text?: unknown } | null);

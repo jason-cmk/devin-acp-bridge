@@ -181,7 +181,8 @@ Add the `devin` agent from step 2 as well. In this mode the plugin only refreshe
 - Messages you type while Devin works go to the running turn, and Devin reads them at its next step, as in the
   Devin CLI. Queued messages (OpenCode's queue delivery) still wait until the turn ends.
 - With the plugin option `"toolCards": true` (experimental), each Devin tool call shows as an OpenCode tool
-  card instead of a markdown line.
+  card instead of a markdown line: `✓ devin [title=Run git status]`. Click the card to see the command output
+  or the diff.
 
 ## Choose a model
 

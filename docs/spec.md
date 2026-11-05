@@ -185,7 +185,7 @@ session ID in the `x-opencode-session` header (also `x-opencode-session-id`, `x-
   user/assistant turns plus the latest user message (`transcriptPrompt` in `src/sessions.ts`).
 - **System messages:** drop them. Devin has its own system prompt, and OpenCode's prompt describes tools that
   Devin does not have.
-- **`tools` array:** ignore it, except `question` (§6.12) and the plugin's `devin_tool` (§6.16). OpenCode sends
+- **`tools` array:** ignore it, except `question` (§6.12) and the plugin's `devin` card tool (§6.16). OpenCode sends
   its tool definitions on every main-chat request (§11).
 - **Title requests:** never sent to Devin. The bridge waits up to 20 s for Devin's own title for the OpenCode
   session (`session_info_update`, also after the turn ended), then falls back to the first five words of the
@@ -317,6 +317,7 @@ new child and a new Devin session with the transcript (§6.2).
 | `POST` | `/v1/chat/completions` | Streaming (SSE). Non-streaming requests: buffer the same output and return one completion. |
 | `GET` | `/v1/commands` | Devin's slash commands for the `X-Devin-Cwd` project (§6.15): `{ data: [{ name, description, hint? }] }`. |
 | `POST` | `/v1/steer` | `{ session, text }` from the plugin (§6.14): `{ steered: true }` or `{ steered: false, reason }`. |
+| `GET` | `/v1/cards/<callId>` | `{ title, output }` of a tool card the bridge sent (§6.16), for the plugin's `devin` tool; 404 if unknown. |
 | `GET` | `/healthz` | `{ status, pid, build, devin: "running" \| "stopped", sessions, busy, waitingForAnswer }`. No auth. No session content. |
 
 ### 6.10 Model selection
@@ -442,12 +443,19 @@ server plugin, `opencode-plugin/index.ts`.
 
 ### 6.16 Tool cards (opt-in)
 
-- **Plugin option `toolCards: true`.** The plugin registers `devin_tool` (`codemode: false`, so it is a
-  top-level tool). Its `execute` returns the card's `output` and sets `metadata.title`; it runs nothing.
-- **Bridge.** When the request offers `devin_tool`, `TurnRenderer` holds each tool's markdown back and, when
+- **Plugin option `toolCards: true`.** The plugin registers `devin` (`codemode: false`, so it is a top-level
+  tool). Its input is `{ title }` only. Its `execute` reads the card's output from `GET /v1/cards/<callId>`
+  with the call ID from its context, and sets `metadata.title`; it runs nothing. If the bridge does not have
+  the card, the output is `(output unavailable: …)`.
+- **Why the output is not in the input.** OpenCode's TUI draws a tool it does not know as one line,
+  `<tool> [key=value, …]`, from the string fields of the input, and ignores `metadata.title`. A click expands
+  the input fields and the tool output (§11.20). With `{ title }` only, the line reads
+  `✓ devin [title=Run git status]` and the output shows once, on click.
+- **Bridge.** When the request offers `devin`, `TurnRenderer` holds each tool's markdown back and, when
   the tool finishes, produces a card `{ title, output }`: `Run <command>` or `<title> <paths>`, with shell
-  output (200 lines), diffs and a non-zero exit code. The turn ends the response with one `devin_tool` call
-  per card; the request that carries its result resumes the turn, as for questions. Rejected calls, and
+  output (200 lines), diffs and a non-zero exit code. The turn ends the response with one `devin` call
+  per card and keeps the card by call ID (`CardStore`, newest 500); the request that carries its result
+  resumes the turn, as for questions. Rejected calls, and
   tools still running at the end of the turn, stay markdown. A later request without the tool gets the card
   as markdown.
 - **Cost.** Each finished Devin tool is one more OpenCode step and one localhost round trip. An agent step
@@ -462,7 +470,7 @@ server plugin, `opencode-plugin/index.ts`.
 | Undo/revert in OpenCode | Reverts the transcript and Devin's edits in the worktree: OpenCode snapshots the worktree around each step (§11.15). Gitignored files are not in the snapshot. The next message replays the shortened transcript into a new Devin session. | None needed. |
 | OpenCode `/compact` (§11.19) | Would cost one or two Devin turns and move the conversation to a new Devin session that sees only OpenCode's summary. | The bridge answers the compaction prompt locally and keeps the same Devin session. Devin compacts its own context; `/devin:compact` forces it. |
 | Editing or retrying a message | Starts a new Devin session with a text transcript; Devin's tool state is lost. | No ACP fork or rewind exists (§11.14). |
-| OpenCode's own tools/permissions | Sent to the bridge but not used, except `question` (§6.12, §6.13) and `devin_tool` (§6.16). | Bridge ignores the other `tools`; agent denies edit/shell as a safety net. |
+| OpenCode's own tools/permissions | Sent to the bridge but not used, except `question` (§6.12, §6.13) and the `devin` card tool (§6.16). | Bridge ignores the other `tools`; agent denies edit/shell as a safety net. |
 
 ## 8. Milestones
 
@@ -482,18 +490,19 @@ server plugin, `opencode-plugin/index.ts`.
 | M11 | **Done 2026-11-05.** Native-feel pass: images (§6.2), Devin's session title (§6.2), `Always allow this command` (§6.13), thought-level variants (§6.10), steering (§6.14), `/devin:` commands (§6.15), opt-in tool cards (§6.16). Revert needed no change. | §11.12–§11.16. Parked: edit/retry fork (no ACP method), todo panel (no OpenCode todo tool). |
 | M12 | **Done 2026-11-05.** `build` → `accept-edits` instead of `bypass` (§6.11), so the policy file and permission prompts apply to every agent. | Unit test. |
 | M13 | **Done 2026-11-05.** Opt-in `devin-bypass` agent → Devin `bypass` mode (§6.11). | Unit test. |
+| M14 | **Done 2026-11-05.** Tool cards readable in the TUI (§6.16): the card tool is `devin`, its input is the title only, and the plugin reads the output from the bridge by call ID. | Unit tests; TUI in tmux against real Devin, collapsed and expanded (§11.20). |
 | M15 | **Done 2026-11-05.** Cache reads in `usage` (§6.4): Devin's `cachedReadTokens` → `prompt_tokens_details.cached_tokens`. | Unit tests; `opencode run` showed `cache.read` (§11.21). |
 
 ## 9. Test plan
 
-- **Unit (bun test, 177 tests):** elicitation ↔ question mapping, answer parsing and tool-result lookup
+- **Unit (bun test, 180 tests):** elicitation ↔ question mapping, answer parsing and tool-result lookup
   (`questions.test.ts`); turn pause, buffering, resume, question fallback, permission prompts, `Always allow`,
   steering, cards and the output queue (`turn.test.ts`); askable decisions, prompt text, allow-once response,
   always-allow rule and policy append (`permissions.test.ts`); model catalog, exclude filter, thought levels
   and the `default` variant (`models.test.ts`); Devin title and title board (`titles.test.ts`); command filter
   and prompt (`commands.test.ts`); session keys, history check, transcript, images and OpenCode harness messages (`sessions.test.ts`); image parts, title
-  detection, stop reasons and usage mapping (`openai.test.ts`); every rendered update type, fence tracking, usage and card
-  mode (`render.test.ts`); unified diff (`diff.test.ts`); policy matching, chained-command guard, `switch_bypass`
+  detection, stop reasons and usage mapping (`openai.test.ts`); every rendered update type, fence tracking, usage, card
+  mode, the card tool call and the card store (`render.test.ts`); unified diff (`diff.test.ts`); policy matching, chained-command guard, `switch_bypass`
   never selected, reject reasons, policy loading (`permissions.test.ts`); token resolution and bearer check
   (`auth.test.ts`); agent-to-mode mapping and initial mode (`modes.test.ts`); `BUN_BE_BUN` removed from
   Devin's environment (`devin.test.ts`).
@@ -809,12 +818,12 @@ Test project: `managed-e2e/project-{a,b}` (plugin and agent only, no provider).
 ### 11.16 Tool cards (2026-11-05)
 
 - `opencode serve` with `toolCards: true`: one turn that read then edited a file produced two assistant steps
-  ending `tool-calls`, each with a completed `devin_tool` part (`Read file cards-probe.txt`, `Edit file
+  ending `tool-calls`, each with a completed `devin_tool` part (now `devin`, §11.20) (`Read file cards-probe.txt`, `Edit file
   cards-probe.txt`), then a `stop` step with `DONE`. The file was edited.
 - The first try after the bridge started failed before any request reached the bridge: the plugin's first
   refresh read the commands (a Devin session, up to 10 s) before it registered the models. The plugin now
   registers models first.
-- Not yet verified: how the TUI draws `devin_tool` cards, and long turns against an agent step limit.
+- Not yet verified: long turns against an agent step limit. TUI drawing: §11.20.
 - Test harness note: background processes started by this agent's shell tool stop when the tool call ends,
   which explains the unexplained e2e bridge exits in §11.9 and §11.10. `/tmp/with-bridge.sh`-style wrappers
   that start and stop the bridge inside one call avoid it.
@@ -887,6 +896,24 @@ Captured with the M0 stub (`STUB_PORT=7318`) and `opencode serve` in `e2e/`, usi
   model calls its `subagent` tool, and Devin never calls OpenCode tools. A `devin/*` model can still run as a
   subagent of another primary model; that request arrives with the child session's `x-opencode-session` and
   becomes a new Devin session. Not tested.
+
+### 11.20 Tool cards in the TUI (2026-11-05)
+
+Run in tmux: the e2e bridge, `opencode --standalone` in `e2e/` with `toolCards: true`, one prompt, and
+`tmux capture-pane`. A click was sent as an SGR mouse sequence.
+
+- OpenCode 2.2.5 draws a tool it does not know with one generic component: `✓ <tool> [key=value, …]`, built from
+  the string, number and boolean fields of the input (found in the binary). It does not read
+  `metadata.title`. A click lists every input field and then `output:` with the tool result.
+- Before: the input was `{ title, output }`, so the line read
+  `✓ devin_tool [title=Run cat scratch.txt, output=line one line 2 line three]` and a click showed the output
+  twice.
+- Change: the tool is `devin`, its input is `{ title }`, and `execute` reads the output from
+  `GET /v1/cards/<callId>`. The plugin's `context.id` is the call ID the bridge sent.
+- After, with real Devin: `cat scratch.txt` gave `✓ devin [title=Run cat scratch.txt]`; a click showed
+  `title: Run cat scratch.txt` and `output: line one / line 2 / line three`. A read-then-edit turn gave two
+  cards, `Read file scratch.txt` (`(no output)`: Devin's read tool returns no content) and
+  `Edit file scratch.txt` with the unified diff as output.
 
 ### 11.21 Cached tokens in usage (2026-11-05)
 

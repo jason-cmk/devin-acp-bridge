@@ -63,7 +63,7 @@ export class Turn {
 
   /**
    * Attaches a response and resolves when the turn ends or pauses. `canAsk` and `canCard` say whether the
-   * request offered OpenCode's `question` tool and the plugin's `devin_tool`.
+   * request offered OpenCode's `question` tool and the plugin's `devin` card tool.
    */
   next(sink: (delta: Delta) => void, canAsk: boolean, canCard = false): Promise<TurnStep> {
     this.sink = sink;
