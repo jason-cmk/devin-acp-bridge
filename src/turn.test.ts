@@ -165,6 +165,33 @@ describe("Turn", () => {
     expect(await reply).toEqual(REJECTED);
   });
 
+  test("asks two parallel permissions one at a time and replies to each with its own answer", async () => {
+    const devin = fakePrompt();
+    let calls = 0;
+    const turn = new Turn(new TurnRenderer("/"), devin.run, () => `call_${++calls}`);
+    const step = turn.next(() => {}, true);
+    const firstReply = devin.askPermission();
+    const secondReply = devin.askPermission();
+    const firstPause = await step;
+    expect(firstPause.kind === "question" && firstPause.question.callId).toBe("call_1");
+
+    const middle = collector();
+    const secondStep = turn.next(middle.sink, true);
+    turn.answer([["Allow once"]]);
+    expect(await firstReply).toEqual(ALLOWED);
+    const secondPause = await secondStep;
+    expect(secondPause.kind === "question" && secondPause.question.callId).toBe("call_2");
+    expect(middle.text()).toContain("> **Permission** allowed by you: `rm x`");
+
+    const last = collector();
+    const done = turn.next(last.sink, true);
+    turn.answer([["Reject"]]);
+    expect(await secondReply).toEqual(REJECTED);
+    devin.end();
+    expect(await done).toEqual({ kind: "done", stopReason: "end_turn" });
+    expect(last.text()).toContain("> **Permission** rejected by you: `rm x`");
+  });
+
   test("rejects an unmatched permission by policy when OpenCode did not offer the question tool", async () => {
     const devin = fakePrompt();
     const turn = new Turn(new TurnRenderer("/"), devin.run);

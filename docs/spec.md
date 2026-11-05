@@ -475,7 +475,7 @@ server plugin, `opencode-plugin/index.ts`.
 
 ## 9. Test plan
 
-- **Unit (bun test, 167 tests):** elicitation ↔ question mapping, answer parsing and tool-result lookup
+- **Unit (bun test, 168 tests):** elicitation ↔ question mapping, answer parsing and tool-result lookup
   (`questions.test.ts`); turn pause, buffering, resume, question fallback, permission prompts, `Always allow`,
   steering, cards and the output queue (`turn.test.ts`); askable decisions, prompt text, allow-once response,
   always-allow rule and policy append (`permissions.test.ts`); model catalog, exclude filter, thought levels
@@ -748,7 +748,7 @@ Test project: `managed-e2e/project-{a,b}` (plugin and agent only, no provider).
   first response ended with the `Permission` question; answering `Allow once` gave `> **Permission** allowed by
   you: …`, Devin ran the command, the file existed, reply `RAN`. `--permission=reject`: `rejected by you`, file
   not created, reply `REJECTED`.
-- Not yet verified: the interactive TUI picker for permissions, and Devin asking two permissions in parallel.
+- Not yet verified: the interactive TUI picker for permissions. Two permissions in one step: §11.18.
 
 ### 11.12 Images, titles, Always allow, thought levels (2026-11-05)
 
@@ -836,6 +836,20 @@ the billed turns ran the bridge with the real `HOME` in manual mode on port 7318
 - Two copies of the plugin at different paths (global config and project config) both load and leave only the
   config's static `devin/devin` model. The same path in both is loaded once. Documented in README
   troubleshooting; not fixed.
+
+### 11.18 Two permissions in one step (2026-11-05)
+
+- New unit test: two `permission-ask` events queued together. It showed that the decision line for the first
+  prompt (`allowed by you: …`) went out *after* the second prompt, because the answer's output was appended
+  behind the queued pause. Fix (`turn.ts`): a pause's `resolve` returns the output that reports the answer,
+  and `Turn.answer` puts it at the front of the queue.
+- `stub/question-flow.ts --permission=two` against real Devin: Devin made two parallel `touch` tool calls.
+  Response 1 asked about `-a`; response 2 had `allowed by you: …-a` and then asked about `-b`; response 3 had
+  `rejected by you: …-b` and `A=RAN B=REJECTED`. Only `-a` existed afterwards.
+- `bridge-debug.ndjson` shows Devin serialises the requests: the `tool_call` for `-b` arrived 10 ms after the
+  permission request for `-a`, but the permission request for `-b` came only after `-a` completed. So with
+  parallel shell calls the bridge never holds two prompts at once; the ordering fix matters when other pauses
+  (questions, tool cards) are queued behind a prompt.
 
 ## 12. References
 

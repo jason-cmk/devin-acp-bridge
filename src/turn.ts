@@ -17,8 +17,11 @@ type Waiter = { resolve: (step: TurnStep) => void; reject: (error: Error) => voi
 type Final = { step: TurnStep } | { error: Error };
 /** Labels per question as OpenCode returned them; `undefined` means no answer (dismissed, moved on, timed out). */
 type Answers = string[][] | undefined;
-/** A point where the response ends with one OpenCode tool call: a question (`form`) or a tool card (`card`). */
-type Pause = { form?: QuestionForm; card?: ToolCard; resolve: (answers: Answers) => void };
+/**
+ * A point where the response ends with one OpenCode tool call: a question (`form`) or a tool card (`card`).
+ * `resolve` returns the output that reports the answer; it goes out before anything queued behind the pause.
+ */
+type Pause = { form?: QuestionForm; card?: ToolCard; resolve: (answers: Answers) => Delta[] | void };
 type Item = { delta: Delta } | { pause: Pause };
 
 /**
@@ -87,13 +90,15 @@ export class Turn {
   answer(answers: Answers): void {
     const pending = this.pending;
     this.pending = undefined;
-    pending?.resolve(answers);
+    const report = pending?.resolve(answers) ?? [];
+    this.items.unshift(...report.map((delta) => ({ delta })));
+    this.drain();
   }
 
   /** Answers the pending pause and every queued one with no answer, so Devin can end a cancelled turn. */
   abandon(): void {
     this.answer(undefined);
-    for (const item of this.items.splice(0)) if ("pause" in item) item.pause.resolve(undefined);
+    for (const item of this.items.splice(0)) if ("pause" in item) this.emit(item.pause.resolve(undefined) ?? []);
   }
 
   private handle(event: TurnEvent): void {
@@ -101,7 +106,7 @@ export class Turn {
     if (event.kind === "permission-ask") return this.askPermission(event);
     this.emit(this.renderer.handle(event));
     for (let card = this.renderer.takeCard(); card; card = this.renderer.takeCard()) {
-      this.push({ pause: { card, resolve: () => {} } });
+      this.push({ pause: { card, resolve: () => [] } });
     }
   }
 
@@ -112,7 +117,7 @@ export class Turn {
       event.respond({ action: "cancel" });
       return this.emit(this.renderer.note(`> **Question** cancelled: ${reason}.`));
     }
-    this.push({ pause: { form, resolve: (answers) => event.respond(answers ? elicitationResponse(form, answers) : { action: "cancel" }) } });
+    this.push({ pause: { form, resolve: (answers) => void event.respond(answers ? elicitationResponse(form, answers) : { action: "cancel" }) } });
   }
 
   /**
@@ -134,8 +139,8 @@ export class Turn {
           const always = choice === PERMISSION_ALWAYS && event.remember !== undefined;
           const allowed = choice === PERMISSION_ALLOW || always;
           event.respond(allowed ? allowOnceResponse(request) : event.fallback);
-          this.emit(this.renderer.handle({ kind: "permission", request, allowed, byUser: true }));
-          if (always) this.emit(this.renderer.note(this.remember(event.remember!)));
+          const report = this.renderer.handle({ kind: "permission", request, allowed, byUser: true });
+          return always ? [...report, ...this.renderer.note(this.remember(event.remember!))] : report;
         },
       },
     });

@@ -44,6 +44,7 @@ its OpenCode config, options table and troubleshooting in step with the code.
   with `--move-on`), or of a permission prompt for an unmatched `touch /tmp/devin-bridge-ask-*`.
 - `stub/question-flow.ts … --permission=always` — the same, answering "Always allow"; point
   `DEVIN_BRIDGE_POLICY` at a copy of `e2e/policy.json` first, because it appends a rule.
+- `stub/question-flow.ts … --permission=two` — asks for two parallel commands; allows `-a`, rejects `-b`.
 - `DEVIN_BRIDGE_TOKEN=e2e-token bun run stub/title-flow.ts 7318` — one billed turn; sends the chat and title
   requests together and prints Devin's title.
 - `DEVIN_BRIDGE_TOKEN=e2e-token bun run stub/steer-flow.ts 7318` — one billed turn; steers a running turn.
