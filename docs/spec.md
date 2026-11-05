@@ -232,7 +232,11 @@ Rules:
 
 `usage` comes from Devin's last top-level `usage_update` in the turn: `prompt_tokens` =
 `_meta["cognition.ai/inputTokens"]` (falls back to `used`), `completion_tokens` =
-`_meta["cognition.ai/outputTokens"]`. Updates with `_meta["cognition.ai/subagent_context"]` are ignored.
+`_meta["cognition.ai/outputTokens"]`, and `prompt_tokens_details.cached_tokens` =
+`_meta["cognition.ai/cachedReadTokens"]` when Devin sends it. `inputTokens` already includes the cached tokens,
+as OpenAI's `prompt_tokens` does. `cachedWriteTokens` is dropped: Chat Completions has no field for it, and
+OpenCode's openai-compatible provider always sets cache writes to undefined (§11.21). Updates with
+`_meta["cognition.ai/subagent_context"]` are ignored.
 
 ### 6.5 Permissions
 
@@ -478,16 +482,17 @@ server plugin, `opencode-plugin/index.ts`.
 | M11 | **Done 2026-11-05.** Native-feel pass: images (§6.2), Devin's session title (§6.2), `Always allow this command` (§6.13), thought-level variants (§6.10), steering (§6.14), `/devin:` commands (§6.15), opt-in tool cards (§6.16). Revert needed no change. | §11.12–§11.16. Parked: edit/retry fork (no ACP method), todo panel (no OpenCode todo tool). |
 | M12 | **Done 2026-11-05.** `build` → `accept-edits` instead of `bypass` (§6.11), so the policy file and permission prompts apply to every agent. | Unit test. |
 | M13 | **Done 2026-11-05.** Opt-in `devin-bypass` agent → Devin `bypass` mode (§6.11). | Unit test. |
+| M15 | **Done 2026-11-05.** Cache reads in `usage` (§6.4): Devin's `cachedReadTokens` → `prompt_tokens_details.cached_tokens`. | Unit tests; `opencode run` showed `cache.read` (§11.21). |
 
 ## 9. Test plan
 
-- **Unit (bun test, 172 tests):** elicitation ↔ question mapping, answer parsing and tool-result lookup
+- **Unit (bun test, 177 tests):** elicitation ↔ question mapping, answer parsing and tool-result lookup
   (`questions.test.ts`); turn pause, buffering, resume, question fallback, permission prompts, `Always allow`,
   steering, cards and the output queue (`turn.test.ts`); askable decisions, prompt text, allow-once response,
   always-allow rule and policy append (`permissions.test.ts`); model catalog, exclude filter, thought levels
   and the `default` variant (`models.test.ts`); Devin title and title board (`titles.test.ts`); command filter
   and prompt (`commands.test.ts`); session keys, history check, transcript, images and OpenCode harness messages (`sessions.test.ts`); image parts, title
-  detection and stop reasons (`openai.test.ts`); every rendered update type, fence tracking, usage and card
+  detection, stop reasons and usage mapping (`openai.test.ts`); every rendered update type, fence tracking, usage and card
   mode (`render.test.ts`); unified diff (`diff.test.ts`); policy matching, chained-command guard, `switch_bypass`
   never selected, reject reasons, policy loading (`permissions.test.ts`); token resolution and bearer check
   (`auth.test.ts`); agent-to-mode mapping and initial mode (`modes.test.ts`); `BUN_BE_BUN` removed from
@@ -882,6 +887,20 @@ Captured with the M0 stub (`STUB_PORT=7318`) and `opencode serve` in `e2e/`, usi
   model calls its `subagent` tool, and Devin never calls OpenCode tools. A `devin/*` model can still run as a
   subagent of another primary model; that request arrives with the child session's `x-opencode-session` and
   becomes a new Devin session. Not tested.
+
+### 11.21 Cached tokens in usage (2026-11-05)
+
+- Devin's top-level `usage_update._meta` has `inputTokens`, `outputTokens`, `cachedReadTokens` and
+  `cachedWriteTokens`. Example: input 84577, output 48, cache read 10759, cache write 20932, `used` 84625.
+  `used` = input + output, so `inputTokens` includes both cache counts.
+- OpenCode 2.2.5 (openai-compatible, streaming): `inputTokens.total` = `prompt_tokens`, `noCache` =
+  `prompt_tokens - prompt_tokens_details.cached_tokens`, `cacheRead` = `cached_tokens`, `cacheWrite` =
+  undefined. Its context total is `input + cache.read + cache.write`, so it still equals `prompt_tokens`. Cache
+  writes cannot reach OpenCode through Chat Completions; they stay inside the `input` count.
+- Before: the bridge sent no `prompt_tokens_details`, so OpenCode showed `cache.read: 0`.
+- After (`opencode run` in `e2e/`, one turn): `tokens` = `{ input: 63536, output: 4, cache: { read: 23570,
+  write: 0 } }`.
+- The non-streamed response now uses the same `openAiUsage` mapping as the streamed usage chunk.
 
 ## 12. References
 

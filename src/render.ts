@@ -19,7 +19,8 @@ type ToolState = {
   finished?: boolean;
 };
 
-export type TurnUsage = { promptTokens: number; completionTokens: number };
+/** `promptTokens` includes `cachedTokens`, as OpenAI's `prompt_tokens` includes `cached_tokens`. */
+export type TurnUsage = { promptTokens: number; completionTokens: number; cachedTokens?: number };
 /** A finished Devin tool call, shown with the plugin's `devin_tool` in an OpenCode tool card (§6.16). */
 export type ToolCard = { title: string; output: string };
 /** The plugin registers this tool; its `execute` only returns the card's output (opencode-plugin/index.ts). */
@@ -137,9 +138,11 @@ export class TurnRenderer {
         if (meta["cognition.ai/subagent_context"]) return [];
         const input = meta["cognition.ai/inputTokens"];
         const output = meta["cognition.ai/outputTokens"];
+        const cacheRead = meta["cognition.ai/cachedReadTokens"];
         this.usage = {
           promptTokens: typeof input === "number" ? input : update.used,
           completionTokens: typeof output === "number" ? output : 0,
+          ...(typeof cacheRead === "number" ? { cachedTokens: cacheRead } : {}),
         };
         return [];
       }

@@ -168,7 +168,8 @@ Add the `devin` agent from step 2 as well. In this mode the plugin only refreshe
 - Permission decisions, for example `> **Permission** rejected by bridge policy (reject rule): \`rm -rf build\``
   or `> **Permission** allowed by you: \`npm test\``. Devin tells its model that "the user" rejected the call,
   even when the bridge policy rejected it.
-- Token usage for each turn, as Devin reports it.
+- Token usage for each turn, as Devin reports it, including cache reads. Cache writes stay in the input count,
+  because OpenCode's OpenAI-compatible provider has no field for them.
 - Devin's questions in OpenCode's own question picker. Devin waits for your answer and then continues the same
   turn. If you type a new message instead, the bridge cancels the question and Devin's turn, then sends your
   message. The agent must allow OpenCode's `question` tool; otherwise the bridge cancels the question and says

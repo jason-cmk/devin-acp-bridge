@@ -1,5 +1,24 @@
 import { describe, expect, test } from "bun:test";
-import { finishReason, isTitleRequest, lastUserText, localTitle, messageImages, messageText, type ChatRequest } from "./openai";
+import { finishReason, isTitleRequest, lastUserText, localTitle, messageImages, messageText, openAiUsage, type ChatRequest } from "./openai";
+
+describe("openAiUsage", () => {
+  test("reports zero usage when Devin sent none", () => {
+    expect(openAiUsage(undefined)).toEqual({ prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 });
+  });
+
+  test("leaves out prompt_tokens_details when Devin sent no cache count", () => {
+    expect(openAiUsage({ promptTokens: 900, completionTokens: 40 })).toEqual({ prompt_tokens: 900, completion_tokens: 40, total_tokens: 940 });
+  });
+
+  test("reports the cache read count as cached_tokens inside prompt_tokens", () => {
+    expect(openAiUsage({ promptTokens: 84577, completionTokens: 48, cachedTokens: 10759 })).toEqual({
+      prompt_tokens: 84577,
+      completion_tokens: 48,
+      total_tokens: 84625,
+      prompt_tokens_details: { cached_tokens: 10759 },
+    });
+  });
+});
 
 const titleRequest: ChatRequest = {
   messages: [

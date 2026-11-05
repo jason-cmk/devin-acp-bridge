@@ -152,6 +152,18 @@ describe("TurnRenderer", () => {
     expect(renderer.usage).toEqual({ promptTokens: 900, completionTokens: 40 });
   });
 
+  test("keeps Devin's cache read count", () => {
+    const renderer = new TurnRenderer(cwd);
+    const meta = {
+      "cognition.ai/inputTokens": 84577,
+      "cognition.ai/outputTokens": 48,
+      "cognition.ai/cachedReadTokens": 10759,
+      "cognition.ai/cachedWriteTokens": 20932,
+    };
+    renderer.handle(update({ sessionUpdate: "usage_update", used: 84625, size: 1000000, _meta: meta }));
+    expect(renderer.usage).toEqual({ promptTokens: 84577, completionTokens: 48, cachedTokens: 10759 });
+  });
+
   test("keeps paths outside the working directory absolute", () => {
     const result = output(new TurnRenderer(cwd), [
       update({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Read file", kind: "read", locations: [{ path: "/etc/hosts" }] }),

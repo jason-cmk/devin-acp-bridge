@@ -11,6 +11,7 @@ import {
   localTitle,
   messageText,
   offersTool,
+  openAiUsage,
   sseChunk,
   sseUsageChunk,
   type ChatRequest,
@@ -22,7 +23,7 @@ import { AGENT_HEADER, devinModeFor } from "./modes";
 import { DEFAULT_MODEL_ID, THOUGHT_HEADER, thoughtLevelFor, thoughtLevels, type DevinModel, type ModelCatalog, type ThoughtLevels } from "./models";
 import { defaultPolicyPath } from "./permissions";
 import { parseAnswers, QUESTION_TOOL, questionToolCall, toolResultText } from "./questions";
-import { CARD_TOOL, cardToolCall, TurnRenderer, type TurnUsage } from "./render";
+import { CARD_TOOL, cardToolCall, TurnRenderer } from "./render";
 import { compactionSummary, latestUserImages, latestUserText, SessionStore, sessionKey } from "./sessions";
 import { devinTitle, TitleBoard } from "./titles";
 import { Turn, type TurnStep } from "./turn";
@@ -343,7 +344,7 @@ async function turnResponse(request: Request, body: ChatRequest, key: string, se
   if (!body.stream) {
     let text = "";
     const step = await next((delta) => (text += delta.content ?? ""));
-    const usage = usageOf(turn.renderer.usage);
+    const usage = openAiUsage(turn.renderer.usage);
     const call = pauseCall(step);
     if (call) return Response.json({ ...completion(model, text, "tool_calls", [call]), usage });
     return Response.json({ ...completion(model, text, step.kind === "done" ? finishReason(step.stopReason) : "stop"), usage });
@@ -374,18 +375,12 @@ async function turnResponse(request: Request, body: ChatRequest, key: string, se
           send(sseChunk(model, { content: `\n\n_The bridge could not complete the Devin turn: ${(error as Error).message}_` }));
           send(sseChunk(model, {}, "stop"));
         }
-        if (body.stream_options?.include_usage) send(sseUsageChunk(model, usageOf(turn.renderer.usage)));
+        if (body.stream_options?.include_usage) send(sseUsageChunk(model, openAiUsage(turn.renderer.usage)));
         send("data: [DONE]\n\n");
         if (!request.signal.aborted) controller.close();
       },
     }),
   );
-}
-
-function usageOf(usage: TurnUsage | undefined) {
-  const prompt = usage?.promptTokens ?? 0;
-  const completionTokens = usage?.completionTokens ?? 0;
-  return { prompt_tokens: prompt, completion_tokens: completionTokens, total_tokens: prompt + completionTokens };
 }
 
 const server = Bun.serve({

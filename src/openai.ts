@@ -1,4 +1,5 @@
 import type { StopReason } from "@agentclientprotocol/sdk";
+import type { TurnUsage } from "./render";
 
 export type ChatContentPart = { type: string; text?: string; image_url?: { url?: string } };
 export type ImageBlock = { type: "image"; mimeType: string; data: string };
@@ -90,9 +91,25 @@ export function sseChunk(model: string, delta: Delta, finish: string | null = nu
   })}\n\n`;
 }
 
-export type Usage = { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+export type Usage = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  prompt_tokens_details?: { cached_tokens: number };
+};
 
 const NO_USAGE: Usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+
+export function openAiUsage(usage: TurnUsage | undefined): Usage {
+  if (!usage) return NO_USAGE;
+  const { promptTokens, completionTokens, cachedTokens } = usage;
+  return {
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: promptTokens + completionTokens,
+    ...(cachedTokens === undefined ? {} : { prompt_tokens_details: { cached_tokens: cachedTokens } }),
+  };
+}
 
 export function sseUsageChunk(model: string, usage: Usage = NO_USAGE): string {
   return `data: ${JSON.stringify({
@@ -112,6 +129,6 @@ export function completion(model: string, content: string, finish: string, toolC
     created: Math.floor(Date.now() / 1000),
     model,
     choices: [{ index: 0, message: { role: "assistant", content, ...(toolCalls ? { tool_calls: toolCalls } : {}) }, finish_reason: finish }],
-    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    usage: NO_USAGE,
   };
 }
