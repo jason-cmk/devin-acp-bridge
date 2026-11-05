@@ -3,9 +3,12 @@ import type { SessionConfigOption } from "@agentclientprotocol/sdk";
 /** Set by the OpenCode plugin on every request to the Devin provider. */
 export const AGENT_HEADER = "x-opencode-agent";
 
-/** `bypass` means Devin sends no permission requests, so the bridge policy file does not apply to `build`. */
+/**
+ * `build` maps to `accept-edits`, not `bypass`, so its tool calls still go through the policy file and the user.
+ * Keep the explicit entry: without it, `build` after `plan` stays in Devin's `plan` mode.
+ */
 const AGENT_MODES = new Map([
-  ["build", "bypass"],
+  ["build", "accept-edits"],
   ["plan", "plan"],
 ]);
 

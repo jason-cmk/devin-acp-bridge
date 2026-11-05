@@ -3,8 +3,8 @@ import type { SessionConfigOption } from "@agentclientprotocol/sdk";
 import { devinModeFor, initialMode } from "./modes";
 
 describe("devinModeFor", () => {
-  test("maps OpenCode's build agent to bypass and plan agent to plan", () => {
-    expect(devinModeFor("build")).toBe("bypass");
+  test("maps OpenCode's build agent to accept-edits and plan agent to plan", () => {
+    expect(devinModeFor("build")).toBe("accept-edits");
     expect(devinModeFor("plan")).toBe("plan");
   });
 

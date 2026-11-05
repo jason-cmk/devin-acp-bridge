@@ -14,7 +14,7 @@ its OpenCode config, options table and troubleshooting in step with the code.
 - `src/turn.ts` — one Devin prompt turn that can pause on a question or permission prompt and resume in a
   later HTTP request.
 - `src/questions.ts` — ACP `elicitation/create` form ↔ OpenCode `question` tool call and answer text.
-- `src/modes.ts` — OpenCode agent (`x-opencode-agent`) → Devin session mode (`build` → `bypass`, `plan` → `plan`).
+- `src/modes.ts` — OpenCode agent (`x-opencode-agent`) → Devin session mode (`build` → `accept-edits`, `plan` → `plan`).
 - `src/permissions.ts` — policy file, permission decisions, the permission prompt text and "Always allow" rules.
 - `src/titles.ts` — Devin's session title for OpenCode's title request.
 - `src/commands.ts` — Devin slash commands exposed as `/devin:<name>`.

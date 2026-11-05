@@ -253,12 +253,12 @@ match before the turn:
 
 | OpenCode agent | Devin mode | Effect |
 | --- | --- | --- |
-| `build` | `bypass` | Devin runs every tool without asking. **The policy file does not apply.** |
+| `build` | `accept-edits` | Edits apply; other tools ask; the policy file decides, then you. |
 | `plan` | `plan` | Devin's plan mode, for read-only work. Calls that Devin asks about still go through the policy file, then to you. |
 | any other (for example `devin`) | `accept-edits` | Devin's default: edits apply, other tools ask; the policy file decides, then you. |
 
-Switching agents in the middle of a conversation changes the mode for the next turn. Use `build` only in a
-project where you accept that Devin runs shell commands with no check.
+Switching agents in the middle of a conversation changes the mode for the next turn. The bridge never puts
+Devin in `bypass` mode, so every agent keeps the policy file and the permission prompt.
 
 ## Configuration
 

@@ -352,13 +352,14 @@ server plugin, `opencode-plugin/index.ts`.
 - **Plugin.** A `ctx.session.hook("model.request", …)` scoped to the `devin` provider sets
   `X-OpenCode-Agent: <agent id>` on every request. OpenCode's request body and headers carry no agent otherwise
   (§11.1).
-- **Bridge** (`src/modes.ts`). `build` → Devin mode `bypass`; `plan` → Devin mode `plan`. Any other agent (for
+- **Bridge** (`src/modes.ts`). `build` → Devin mode `accept-edits`; `plan` → Devin mode `plan`. Any other agent (for
   example the `devin` agent in the README) or no header → the mode the session started with (`accept-edits`).
   The bridge sends `session/set_config_option` (`configId: "mode"`) before the turn, only when the mode differs
   from the session's current mode, so switching agents mid-conversation applies to the next turn. A rejected
   value returns 400, as for models.
-- **`bypass` turns off the bridge policy.** Devin sends no `session/request_permission` in `bypass`, so the
-  policy file, the chained-command guard and the `> **Permission**` lines do not apply to `build`.
+- **No `bypass`.** Devin sends no `session/request_permission` in `bypass`, which would turn off the policy
+  file, the chained-command guard and permission prompts. The bridge never selects it. `build` keeps
+  an explicit entry: an unmapped agent does not change the mode, so `build` after `plan` would stay in `plan`.
 
 ### 6.12 Questions (Devin's `ask_user_question` → OpenCode's `question` tool)
 
@@ -406,8 +407,7 @@ server plugin, `opencode-plugin/index.ts`.
 - **Fallback.** If the request did not offer the `question` tool, the bridge rejects at once with the usual
   policy line. A second question or permission that arrives while the turn is paused waits in order and is
   asked in the next response (`Turn` output queue).
-- **Timeout** is `DEVIN_BRIDGE_QUESTION_TIMEOUT_MS`, shared with questions. `build` runs in `bypass` mode, so
-  Devin sends no permission requests there and this section does not apply (§6.11).
+- **Timeout** is `DEVIN_BRIDGE_QUESTION_TIMEOUT_MS`, shared with questions.
 
 ### 6.14 Messages sent while Devin works (steering)
 
@@ -473,6 +473,7 @@ server plugin, `opencode-plugin/index.ts`.
 | M9 | **Done 2026-11-04.** Questions (§6.12): Devin's `ask_user_question` shown with OpenCode's native `question` tool; one Devin turn spans the question and the answer. | `stub/question-flow.ts` answer and `--move-on` paths, and an `opencode run` dismissal, against real Devin (§11.10). Interactive TUI picker confirmed by the user, including three questions in one call. |
 | M10 | **Done 2026-11-05.** Permission prompts (§6.13): requests that no policy rule decides, including chained commands, are asked through OpenCode's `question` tool as `Allow once` / `Reject`. | `stub/question-flow.ts --permission` (file created, `RAN`) and `--permission=reject` (file not created, `REJECTED`) against real Devin (§11.11). |
 | M11 | **Done 2026-11-05.** Native-feel pass: images (§6.2), Devin's session title (§6.2), `Always allow this command` (§6.13), thought-level variants (§6.10), steering (§6.14), `/devin:` commands (§6.15), opt-in tool cards (§6.16). Revert needed no change. | §11.12–§11.16. Parked: edit/retry fork (no ACP method), todo panel (no OpenCode todo tool). |
+| M12 | **Done 2026-11-05.** `build` → `accept-edits` instead of `bypass` (§6.11), so the policy file and permission prompts apply to every agent. | Unit test. |
 
 ## 9. Test plan
 
