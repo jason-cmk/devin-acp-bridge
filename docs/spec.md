@@ -352,14 +352,17 @@ server plugin, `opencode-plugin/index.ts`.
 - **Plugin.** A `ctx.session.hook("model.request", …)` scoped to the `devin` provider sets
   `X-OpenCode-Agent: <agent id>` on every request. OpenCode's request body and headers carry no agent otherwise
   (§11.1).
-- **Bridge** (`src/modes.ts`). `build` → Devin mode `accept-edits`; `plan` → Devin mode `plan`. Any other agent (for
+- **Bridge** (`src/modes.ts`). `build` → Devin mode `accept-edits`; `plan` → Devin mode `plan`; `devin-bypass` →
+  Devin mode `bypass`. Any other agent (for
   example the `devin` agent in the README) or no header → the mode the session started with (`accept-edits`).
   The bridge sends `session/set_config_option` (`configId: "mode"`) before the turn, only when the mode differs
   from the session's current mode, so switching agents mid-conversation applies to the next turn. A rejected
   value returns 400, as for models.
-- **No `bypass`.** Devin sends no `session/request_permission` in `bypass`, which would turn off the policy
-  file, the chained-command guard and permission prompts. The bridge never selects it. `build` keeps
-  an explicit entry: an unmapped agent does not change the mode, so `build` after `plan` would stay in `plan`.
+- **`bypass` only for `devin-bypass`.** Devin sends no `session/request_permission` in `bypass`, which turns off
+  the policy file, the chained-command guard and permission prompts. The bridge selects it only for an agent
+  with that exact name, which the user defines in their OpenCode config (opt-in). An unmapped agent returns the
+  session to its starting mode, so leaving `devin-bypass` ends `bypass` on the next turn. OpenCode's `--auto`
+  does not reach Devin: Devin runs its own tools, and the bridge's prompts are `question` tool calls.
 
 ### 6.12 Questions (Devin's `ask_user_question` → OpenCode's `question` tool)
 
@@ -474,6 +477,7 @@ server plugin, `opencode-plugin/index.ts`.
 | M10 | **Done 2026-11-05.** Permission prompts (§6.13): requests that no policy rule decides, including chained commands, are asked through OpenCode's `question` tool as `Allow once` / `Reject`. | `stub/question-flow.ts --permission` (file created, `RAN`) and `--permission=reject` (file not created, `REJECTED`) against real Devin (§11.11). |
 | M11 | **Done 2026-11-05.** Native-feel pass: images (§6.2), Devin's session title (§6.2), `Always allow this command` (§6.13), thought-level variants (§6.10), steering (§6.14), `/devin:` commands (§6.15), opt-in tool cards (§6.16). Revert needed no change. | §11.12–§11.16. Parked: edit/retry fork (no ACP method), todo panel (no OpenCode todo tool). |
 | M12 | **Done 2026-11-05.** `build` → `accept-edits` instead of `bypass` (§6.11), so the policy file and permission prompts apply to every agent. | Unit test. |
+| M13 | **Done 2026-11-05.** Opt-in `devin-bypass` agent → Devin `bypass` mode (§6.11). | Unit test. |
 
 ## 9. Test plan
 

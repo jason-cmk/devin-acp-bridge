@@ -5,11 +5,16 @@ export const AGENT_HEADER = "x-opencode-agent";
 
 /**
  * `build` maps to `accept-edits`, not `bypass`, so its tool calls still go through the policy file and the user.
- * Keep the explicit entry: without it, `build` after `plan` stays in Devin's `plan` mode.
+ * Keep the explicit entry: an unmapped agent returns to the starting mode only when Devin reported one.
+ * `devin-bypass` is the only route to `bypass`: Devin then sends no permission requests, so the policy file,
+ * the chained-command guard and permission prompts do not apply. Users opt in by defining that agent.
  */
+export const BYPASS_AGENT = "devin-bypass";
+
 const AGENT_MODES = new Map([
   ["build", "accept-edits"],
   ["plan", "plan"],
+  [BYPASS_AGENT, "bypass"],
 ]);
 
 /** Agents without a mode use the mode the Devin session started with. */

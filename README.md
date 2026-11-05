@@ -255,10 +255,27 @@ match before the turn:
 | --- | --- | --- |
 | `build` | `accept-edits` | Edits apply; other tools ask; the policy file decides, then you. |
 | `plan` | `plan` | Devin's plan mode, for read-only work. Calls that Devin asks about still go through the policy file, then to you. |
+| `devin-bypass` | `bypass` | Devin runs every tool without asking. **The policy file, the chained-command guard and permission prompts do not apply.** |
 | any other (for example `devin`) | `accept-edits` | Devin's default: edits apply, other tools ask; the policy file decides, then you. |
 
-Switching agents in the middle of a conversation changes the mode for the next turn. The bridge never puts
-Devin in `bypass` mode, so every agent keeps the policy file and the permission prompt.
+Switching agents in the middle of a conversation changes the mode for the next turn. Leaving `devin-bypass`
+for any other agent ends `bypass` on the next turn. OpenCode's `--auto` flag has no effect on Devin: Devin
+runs its own tools, and the bridge asks through the `question` tool, which `--auto` does not answer.
+
+`devin-bypass` is opt-in: the bridge uses `bypass` only for an agent with that exact name. To use it, add a
+second agent next to `devin` and switch to it (Tab) only in a project where you accept that Devin runs shell
+commands with no check:
+
+```jsonc
+"devin-bypass": {
+  "description": "Devin through the bridge in bypass mode: no permission checks",
+  "mode": "primary",
+  "permissions": [
+    { "action": "edit", "resource": "*", "effect": "deny" },
+    { "action": "shell", "resource": "*", "effect": "deny" }
+  ]
+}
+```
 
 ## Configuration
 

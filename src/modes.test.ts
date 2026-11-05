@@ -8,6 +8,12 @@ describe("devinModeFor", () => {
     expect(devinModeFor("plan")).toBe("plan");
   });
 
+  test("maps only the devin-bypass agent to bypass", () => {
+    expect(devinModeFor("devin-bypass")).toBe("bypass");
+    expect(devinModeFor("bypass")).toBeUndefined();
+    expect(devinModeFor("Devin-Bypass")).toBeUndefined();
+  });
+
   test.each([null, undefined, "", "devin", "constructor", "toString"])("has no mode for agent %p", (agent) => {
     expect(devinModeFor(agent)).toBeUndefined();
   });
