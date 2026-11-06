@@ -8,7 +8,7 @@ import { buildId, cacheDir, ensureBridge } from "../src/managed";
 import { AGENT_HEADER } from "../src/modes";
 import { DEFAULT_MODEL_ID, filterModels, THOUGHT_HEADER, thoughtLevelFor, type DevinModel } from "../src/models";
 import { type NativePermission, PERMISSION_ALLOWED_ALWAYS_RESULT, PERMISSION_ALLOWED_RESULT, PERMISSION_TOOL } from "../src/permissions";
-import { CARD_TOOL } from "../src/render";
+import { CARD_CALL_PREFIX, CARD_TOOL } from "../src/render";
 
 /** Metadata key that marks the plugin's native permission checks for Devin's calls. */
 const DEVIN_PERMISSION_FLAG = "devinBridge";
@@ -85,18 +85,24 @@ async function permissionCheck(baseURL: string | undefined, callId: string): Pro
   }
 }
 
-/** The card output that the bridge stored for this call ID; a note instead when the bridge does not have it. */
-async function cardOutput(baseURL: string | undefined, callId: string): Promise<string> {
-  if (!baseURL) return "(output unavailable: the bridge is not running)";
+type CardResult = { content: string; metadata: Record<string, unknown> };
+
+/** The card result that the bridge stored for this call ID; a note instead when the bridge does not have it. */
+async function cardResult(baseURL: string | undefined, callId: string): Promise<CardResult> {
+  const unavailable = (reason: string): CardResult => ({ content: `(output unavailable: ${reason})`, metadata: {} });
+  if (!baseURL) return unavailable("the bridge is not running");
   try {
     const response = await fetch(`${baseURL}/cards/${encodeURIComponent(callId)}`, {
       headers: { authorization: `Bearer ${resolveToken().value}` },
     });
-    if (!response.ok) return `(output unavailable: bridge returned ${response.status})`;
-    const card = (await response.json()) as { output?: unknown };
-    return typeof card.output === "string" && card.output ? card.output : "(no output)";
+    if (!response.ok) return unavailable(`bridge returned ${response.status}`);
+    const card = (await response.json()) as { tool?: unknown; output?: unknown; metadata?: unknown };
+    const output = typeof card.output === "string" ? card.output : "";
+    const metadata = card.metadata && typeof card.metadata === "object" ? (card.metadata as Record<string, unknown>) : {};
+    // OpenCode's shell renderer prints the content under the command; an empty command output stays empty.
+    return { content: output || (card.tool === "shell" ? "" : "(no output)"), metadata };
   } catch (error) {
-    return `(output unavailable: ${(error as Error).message})`;
+    return unavailable((error as Error).message);
   }
 }
 
@@ -132,7 +138,7 @@ export default Plugin.define({
     const withCommands = ctx.options.commands !== false;
     const withCards = ctx.options.toolCards === true;
     const withNativePermissions = ctx.options.nativePermissions !== false;
-    // The user's reply to each native permission check, by the `devin_permission` call ID. Filled from
+    // The user's reply to each native permission check, by the `permission` call ID. Filled from
     // `permission.asked` (request ID → call ID) and `permission.replied` events.
     const permissionCalls = new Map<string, string>();
     const permissionReplies = new Map<string, "once" | "always" | "reject">();
@@ -158,29 +164,28 @@ export default Plugin.define({
       });
     }
 
-    // Tool cards (opt-in, spec §6.16): the bridge ends a response with a `devin` call for each tool Devin has
-    // already run. The call carries only the title, because OpenCode's TUI shows the input in the card header;
-    // this tool reads the output from the bridge by call ID, so OpenCode shows it when the card is expanded.
+    // Tool cards (opt-in, spec §6.16): the bridge ends a response with one call for each tool Devin has already
+    // run. The call names the OpenCode tool whose renderer fits (`shell`, `edit`, `read`, …), so the TUI draws
+    // it like its own tools. The `execute.before` hook sends every card call to the no-op `devin_card` tool, which
+    // reads the result from the bridge by call ID. The hook is registered first: the bridge sends cards only
+    // when the request offers `devin_card`, so OpenCode never runs a tool that a card call names.
     if (withCards) {
+      await ctx.tool.hook("execute.before", (event) => {
+        if (String(event.id).startsWith(CARD_CALL_PREFIX)) event.tool = CARD_TOOL;
+      });
       await ctx.tool.transform((editor) => {
         editor.add({
           name: CARD_TOOL,
           description: "Shows a tool call that Devin already ran. It has no effect; never call it yourself.",
-          input: {
-            type: "object",
-            properties: { title: { type: "string" } },
-            required: ["title"],
-          },
+          // Any input: the call carries the input of the OpenCode tool it is drawn as.
+          input: { type: "object", properties: {}, additionalProperties: true },
           options: { codemode: false },
-          execute: async (input, context) => {
-            const title = typeof (input as { title?: unknown } | undefined)?.title === "string" ? (input as { title: string }).title : CARD_TOOL;
-            return { content: await cardOutput(baseURL, context.id), metadata: { title } };
-          },
+          execute: async (_input, context) => cardResult(baseURL, context.id),
         });
       });
     }
 
-    // Native permission prompts (spec §6.17): the bridge ends a response with a `devin_permission` call when Devin
+    // Native permission prompts (spec §6.17): the bridge ends a response with a `permission` call when Devin
     // asks a permission that no bridge policy rule decided. This tool asks OpenCode's own permission system, so
     // the user's `permission` rules, the native dialog, "Always" and auto-accept all apply.
     if (withNativePermissions) {

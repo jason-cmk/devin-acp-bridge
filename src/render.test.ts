@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import type { TurnEvent } from "./devin";
 import type { Delta } from "./openai";
-import { CardStore, cardToolCall, todoToolCall, TurnRenderer } from "./render";
+import { CardStore, cardToolCall, todoToolCall, type ToolCard, TurnRenderer } from "./render";
 
 const cwd = "/work/app";
 
@@ -173,25 +173,89 @@ describe("TurnRenderer", () => {
 });
 
 describe("TurnRenderer with tool cards", () => {
-  test("holds a tool back until it finishes, then hands it out as a card instead of markdown", () => {
+  const finish = (renderer: TurnRenderer, toolCallId = "t1") =>
+    renderer.handle(update({ sessionUpdate: "tool_call_update", toolCallId, status: "completed" }));
+
+  test("holds a shell command back until it finishes, then hands it out as an OpenCode shell card", () => {
     const renderer = new TurnRenderer(cwd, { cards: true });
     const before = [
       text("Checking."),
-      update({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Ran git", kind: "execute", rawInput: { command: "git status --short" } }),
+      update({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Ran git", kind: "execute", rawInput: { command: "git status --short", workdir: "/work/app/sub" } }),
       update({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "in_progress", content: [{ type: "content", content: { type: "text", text: " M src/a.ts" } }], _meta: { terminal_exit: { exit_code: 1 } } }),
     ].flatMap((event) => renderer.handle(event));
     expect(before.map((delta) => delta.content).join("")).toBe("Checking.");
     expect(renderer.takeCard()).toBeUndefined();
-    renderer.handle(update({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed" }));
-    expect(renderer.takeCard()).toEqual({ title: "Run git status --short", output: "M src/a.ts\n\nExit code 1" });
+    finish(renderer);
+    expect(renderer.takeCard()).toEqual({
+      title: "Run git status --short",
+      tool: "shell",
+      input: { command: "git status --short", workdir: "sub" },
+      output: "M src/a.ts",
+      metadata: { exit: 1, truncated: false },
+    });
     expect(renderer.takeCard()).toBeUndefined();
   });
 
-  test("puts an edit's diff in the card output, with paths relative to the working directory", () => {
+  test("hands out an edit as an OpenCode edit card with the diff in the metadata", () => {
     const renderer = new TurnRenderer(cwd, { cards: true });
     renderer.handle(update({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Edit file", kind: "edit", locations: [{ path: "/work/app/a.txt" }], content: [{ type: "diff", path: "/work/app/a.txt", oldText: "x\n", newText: "y\n" }] }));
-    renderer.handle(update({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed" }));
-    expect(renderer.takeCard()).toEqual({ title: "Edit file a.txt", output: "a.txt\n@@ -1,1 +1,1 @@\n-x\n+y" });
+    finish(renderer);
+    expect(renderer.takeCard()).toEqual({
+      title: "Edit file a.txt",
+      tool: "edit",
+      input: { path: "a.txt" },
+      output: "Edited a.txt",
+      metadata: { files: [{ file: "a.txt", patch: "--- a.txt\n+++ a.txt\n@@ -1,1 +1,1 @@\n-x\n+y", status: "modified", additions: 1, deletions: 1 }], truncated: false },
+    });
+  });
+
+  test("hands out edits of several files, or of a new file, as an OpenCode patch card", () => {
+    const renderer = new TurnRenderer(cwd, { cards: true });
+    renderer.handle(update({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Edit files", kind: "edit", content: [
+      { type: "diff", path: "/work/app/a.txt", oldText: "x\n", newText: "y\n" },
+      { type: "diff", path: "/work/app/b.txt", oldText: null, newText: "new\n" },
+    ] }));
+    finish(renderer);
+    const card = renderer.takeCard()!;
+    expect(card.tool).toBe("patch");
+    expect(card.output).toBe("Edited a.txt\nCreated b.txt");
+    expect((card.metadata.files as Array<{ status: string }>).map((file) => file.status)).toEqual(["modified", "added"]);
+  });
+
+  test("hands out a read, a search and a web search with the inputs of OpenCode's tools", () => {
+    const renderer = new TurnRenderer(cwd, { cards: true });
+    renderer.handle(update({ sessionUpdate: "tool_call", toolCallId: "r", title: "Read file", kind: "read", rawInput: { file_path: "/work/app/src/a.ts", offset: 20, limit: 60 } }));
+    renderer.handle(update({ sessionUpdate: "tool_call", toolCallId: "s", title: "Search for 'foo'", kind: "search", rawInput: { query: "foo", path: "/work/app/src", file_pattern: "*.ts" } }));
+    renderer.handle(update({ sessionUpdate: "tool_call", toolCallId: "w", title: "Searched web for bun", kind: "fetch", rawInput: { query: "bun", num_results: 5 } }));
+    ["r", "s", "w"].forEach((id) => finish(renderer, id));
+    expect([renderer.takeCard(), renderer.takeCard(), renderer.takeCard()].map((card) => [card?.tool, card?.input])).toEqual([
+      ["read", { path: "src/a.ts", offset: 20, limit: 60 }],
+      ["grep", { pattern: "foo", path: "src", include: "*.ts" }],
+      ["websearch", { query: "bun" }],
+    ]);
+  });
+
+  test("names other tools as Devin does, with MCP tools in OpenCode's `<server>_<tool>` form", () => {
+    const renderer = new TurnRenderer(cwd, { cards: true });
+    renderer.handle(update({ sessionUpdate: "tool_call", toolCallId: "m", title: "Calling execute_sql from bq", rawInput: { sql: "SELECT 1\nFROM t", nested: { a: 1 } }, _meta: { "cognition.ai/inferenceToolName": "mcp__bq__execute_sql" } }));
+    renderer.handle(update({ sessionUpdate: "tool_call", toolCallId: "k", title: "Kill shell", rawInput: { shell_id: "9ba78e" }, _meta: { "cognition.ai/inferenceToolName": "kill_shell" } }));
+    renderer.handle(update({ sessionUpdate: "tool_call", toolCallId: "q", title: "Asked user", rawInput: { questions: [] }, _meta: { "cognition.ai/inferenceToolName": "question" } }));
+    renderer.handle(update({ sessionUpdate: "tool_call", toolCallId: "t", title: "Thinking", kind: "think" }));
+    ["m", "k", "q", "t"].forEach((id) => finish(renderer, id));
+    expect([1, 2, 3, 4].map(() => renderer.takeCard()).map((card) => [card?.tool, card?.input])).toEqual([
+      ["bq_execute_sql", { sql: "SELECT 1" }],
+      ["kill_shell", { shell_id: "9ba78e" }],
+      ["devin_question", {}],
+      ["think", {}],
+    ]);
+  });
+
+  test("shows a card as markdown, with shell output, diffs and a non-zero exit code", () => {
+    const renderer = new TurnRenderer(cwd, { cards: true });
+    const shell = renderer.cardMarkdown({ title: "Run false", tool: "shell", input: { command: "false" }, output: "oops", metadata: { exit: 1 } });
+    expect(shell.map((delta) => delta.content).join("")).toBe("> **Run false**\n\n```text\noops\n```\n\n> ✗ exited with code 1\n\n");
+    const edit = renderer.cardMarkdown({ title: "Edit file a.txt", tool: "edit", input: { path: "a.txt" }, output: "Edited a.txt", metadata: { files: [{ file: "a.txt", patch: "--- a.txt\n+++ a.txt\n@@ -1 +1 @@\n-x\n+y", status: "modified", additions: 1, deletions: 1 }] } });
+    expect(edit.map((delta) => delta.content).join("")).toBe("> **Edit file a.txt**\n\n`a.txt`\n\n```diff\n@@ -1 +1 @@\n-x\n+y\n```\n\n");
   });
 
   test("renders tools that never finished as markdown at the end of the turn", () => {
@@ -201,26 +265,28 @@ describe("TurnRenderer with tool cards", () => {
   });
 });
 
+const card = (title: string): ToolCard => ({ title, tool: "read", input: { path: title }, output: "", metadata: {} });
+
 describe("cardToolCall", () => {
-  test("sends only the title, so OpenCode's card header shows the title and not the output", () => {
-    const call = cardToolCall("call_1", { title: "Run git status", output: "M a.ts" });
-    expect(call).toEqual({ id: "call_1", type: "function", function: { name: "devin", arguments: '{"title":"Run git status"}' } });
+  test("names the OpenCode tool that draws the card and sends that tool's input", () => {
+    const call = cardToolCall("devincard_1", { title: "Run git status", tool: "shell", input: { command: "git status" }, output: "M a.ts", metadata: { exit: 0 } });
+    expect(call).toEqual({ id: "devincard_1", type: "function", function: { name: "shell", arguments: '{"command":"git status"}' } });
   });
 });
 
 describe("CardStore", () => {
   test("returns a card by call ID", () => {
     const store = new CardStore();
-    store.put("call_1", { title: "Read file", output: "x" });
-    expect(store.get("call_1")).toEqual({ title: "Read file", output: "x" });
+    store.put("call_1", card("x"));
+    expect(store.get("call_1")).toEqual(card("x"));
     expect(store.get("call_2")).toBeUndefined();
   });
 
   test("keeps only the newest cards", () => {
     const store = new CardStore(2);
-    store.put("a", { title: "a", output: "" });
-    store.put("b", { title: "b", output: "" });
-    store.put("c", { title: "c", output: "" });
+    store.put("a", card("a"));
+    store.put("b", card("b"));
+    store.put("c", card("c"));
     expect(store.get("a")).toBeUndefined();
     expect(store.get("b")?.title).toBe("b");
     expect(store.get("c")?.title).toBe("c");

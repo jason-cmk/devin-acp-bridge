@@ -22,7 +22,7 @@ import { addPolicyRule, alwaysAllowRule, decidePermission, loadPolicy, type Reje
 
 export type TurnEvent =
   | { kind: "update"; update: SessionUpdate }
-  | { kind: "permission"; request: RequestPermissionRequest; allowed: boolean; reason?: RejectReason; byUser?: true }
+  | { kind: "permission"; request: RequestPermissionRequest; allowed: boolean; reason?: RejectReason; byUser?: true; shown?: true }
   /** A permission request that no policy rule decided. Devin waits until `respond` is called; `fallback` rejects. */
   | {
       kind: "permission-ask";

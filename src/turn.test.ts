@@ -210,7 +210,21 @@ describe("Turn", () => {
     turn.next(out.sink, { question: true, permission: true });
     turn.answer(nativePermissionAnswer("ALLOWED"));
     expect(await reply).toEqual(ALLOWED);
-    expect(out.text()).toContain("> **Permission** allowed by you: `rm x`");
+    // The native permission card shows the decision, so no markdown line repeats it.
+    expect(out.text()).not.toContain("Permission");
+  });
+
+  test("prints no line after a native rejection", async () => {
+    const devin = fakePrompt();
+    const turn = new Turn(new TurnRenderer("/"), devin.run, () => "call_n");
+    const step = turn.next(() => {}, { question: true, permission: true });
+    const reply = devin.askPermission();
+    await step;
+    const out = collector();
+    turn.next(out.sink, { question: true, permission: true });
+    turn.answer(nativePermissionAnswer("REJECTED"));
+    expect(await reply).toEqual(REJECTED);
+    expect(out.text()).not.toContain("Permission");
   });
 
   test("saves a rule for OpenCode's Always, and allows once when no rule can be saved", async () => {
@@ -318,10 +332,10 @@ describe("Turn", () => {
     devin.say("before ");
     devin.update({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Read file", kind: "read" });
     devin.update({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed" });
-    expect(await step).toEqual({ kind: "card", callId: "call_card", card: { title: "Read file", output: "" } });
+    expect(await step).toEqual({ kind: "card", callId: "devincard_call_card", card: { title: "Read file", tool: "devin_read", input: {}, output: "", metadata: {} } });
     devin.say("after ");
     const answered = devin.ask();
-    expect(turn.pendingCallId).toBe("call_card");
+    expect(turn.pendingCallId).toBe("devincard_call_card");
     turn.answer(undefined);
     const second = collector();
     const paused = await turn.next(second.sink, { question: true, card: true });

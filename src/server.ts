@@ -74,7 +74,7 @@ const liveTurns = new Map<string, { turn: Turn; sessionId: string }>();
 const pendingSteers = new Map<string, string>();
 /** Card output for the plugin's `devin` tool, by call ID (§6.16). */
 const cards = new CardStore();
-/** Native permission checks for the plugin's `devin_permission` tool, by call ID (§6.17). */
+/** Native permission checks for the plugin's `permission` tool, by call ID (§6.17). */
 const permissionChecks = new CardStore<NativePermission>();
 let catalog: { value: Promise<ModelCatalog>; fetchedAt: number } | undefined;
 
@@ -315,7 +315,7 @@ async function steerResponse(body: { session?: unknown; text?: unknown } | null)
   return Response.json({ steered: true });
 }
 
-/** The tool call a paused response ends with: OpenCode's `question`, or the plugin's `devin` card tool. */
+/** The tool call a paused response ends with: OpenCode's `question`, or a card call that the plugin's `devin_card` tool answers. */
 function pauseCall(step: TurnStep): ToolCall | undefined {
   if (step.kind === "question") return questionToolCall(step.question.callId, step.question.form);
   if (step.kind === "card") {

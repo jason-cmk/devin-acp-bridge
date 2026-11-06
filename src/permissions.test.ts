@@ -304,7 +304,7 @@ describe("nativePermission", () => {
 
   test("sends only the title in the tool call", () => {
     const call = permissionToolCall("call_1", nativePermission(request({ "cognition.ai/editableCommand": "ls" }), "no matching rule"));
-    expect(call.function).toEqual({ name: "devin_permission", arguments: '{"title":"Run ls"}' });
+    expect(call.function).toEqual({ name: "permission", arguments: '{"title":"Run ls"}' });
   });
 
   test("maps the tool result to an answer", () => {

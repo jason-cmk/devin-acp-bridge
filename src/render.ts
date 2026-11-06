@@ -12,25 +12,69 @@ type ToolState = {
   command?: string;
   output?: string;
   exitCode?: number;
+  rawInput?: Record<string, unknown>;
+  /** Devin's own tool name, for example `kill_shell` or `mcp__slack__slack_read_channel`. */
+  devinTool?: string;
   announced: boolean;
-  /** Card mode: markdown held back until the tool finishes, and the diffs for the card output. */
+  /** Card mode: markdown held back until the tool finishes, and the changed files for the card. */
   held: string[];
-  diffs: string[];
+  files: CardFile[];
   finished?: boolean;
 };
 
 /** `promptTokens` includes `cachedTokens`, as OpenAI's `prompt_tokens` includes `cached_tokens`. */
 export type TurnUsage = { promptTokens: number; completionTokens: number; cachedTokens?: number };
-/** A finished Devin tool call, shown with the plugin's `devin` tool in an OpenCode tool card (§6.16). */
-export type ToolCard = { title: string; output: string };
+/** One changed file, in the shape of OpenCode's `edit` tool metadata. */
+export type CardFile = { file: string; patch: string; status: "added" | "modified"; additions: number; deletions: number };
 /**
- * The plugin registers this tool. OpenCode's TUI draws an unknown tool as `<name> [key=value, …]` from the tool
- * input, so the input carries only the title. The tool's `execute` reads the output from the bridge by call ID.
+ * A finished Devin tool call, drawn by OpenCode's renderer for `tool` (§6.16). `input` and `metadata` have the
+ * shapes that renderer reads; `output` is the tool result text.
  */
-export const CARD_TOOL = "devin";
+export type ToolCard = { title: string; tool: string; input: Record<string, unknown>; output: string; metadata: Record<string, unknown> };
+/**
+ * The plugin registers this tool, and the bridge sends cards only when a request offers it. The plugin's
+ * `execute.before` hook sends every call whose ID starts with `CARD_CALL_PREFIX` to this tool, so OpenCode never
+ * runs its own tool of the same name. The plugin registers the hook before the tool.
+ */
+export const CARD_TOOL = "devin_card";
+export const CARD_CALL_PREFIX = "devincard_";
 
 export function cardToolCall(callId: string, card: ToolCard): ToolCall {
-  return { id: callId, type: "function", function: { name: CARD_TOOL, arguments: JSON.stringify({ title: card.title }) } };
+  return { id: callId, type: "function", function: { name: card.tool, arguments: JSON.stringify(card.input) } };
+}
+
+/** OpenCode tool names that the fallback must not take: their renderers expect other input shapes. */
+const OPENCODE_TOOLS = new Set([
+  "batch", "bash", "edit", "execute", "glob", "grep", "invalid", "list", "patch", "question", "read", "shell", "skill",
+  "subagent", "task", "todoread", "todowrite", "webfetch", "websearch", "write",
+]);
+const MAX_INPUT_TEXT = 200;
+
+/** OpenCode names MCP tools `<server>_<tool>`; Devin names them `mcp__<server>__<tool>`. */
+function fallbackToolName(state: ToolState): string {
+  const mcp = state.devinTool?.match(/^mcp__(.+?)__(.+)$/);
+  const name = (mcp ? `${mcp[1]}_${mcp[2]}` : state.devinTool ?? state.kind ?? "tool").replace(/[^A-Za-z0-9_-]/g, "_");
+  return OPENCODE_TOOLS.has(name) ? `devin_${name}` : name;
+}
+
+/** The string, number and boolean fields of Devin's input: OpenCode's generic renderer shows only those. */
+function scalarInput(rawInput: Record<string, unknown> | undefined): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(rawInput ?? {}).flatMap(([key, value]): Array<[string, unknown]> => {
+    if (typeof value === "number" || typeof value === "boolean") return [[key, value]];
+    if (typeof value !== "string") return [];
+    const firstLine = value.split("\n")[0]!;
+    return [[key, firstLine.length > MAX_INPUT_TEXT ? `${firstLine.slice(0, MAX_INPUT_TEXT)}…` : firstLine]];
+  }));
+}
+
+function stringField(rawInput: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = rawInput?.[key];
+  return typeof value === "string" && value ? value : undefined;
+}
+
+function numberField(rawInput: Record<string, unknown> | undefined, key: string): Record<string, number> {
+  const value = rawInput?.[key];
+  return typeof value === "number" ? { [key]: value } : {};
 }
 
 /** OpenCode's own todo tool (`experimental.todo`); Devin's plan goes to it as a native todo list (§6.18). */
@@ -154,13 +198,18 @@ export class TurnRenderer {
 
   /** A card as markdown, for a response whose request did not offer the card tool. */
   cardMarkdown(card: ToolCard): Delta[] {
-    return this.block([`> **${card.title}**`, ...(card.output ? [fence("text", card.output.split("\n"))] : [])].join("\n\n"));
+    const files = Array.isArray(card.metadata.files) ? (card.metadata.files as CardFile[]) : [];
+    const shellOutput = card.tool === "shell" && card.output ? [fence("text", card.output.split("\n"))] : [];
+    const diffs = files.map((file) => `${inlineCode(file.file)}\n\n${fence("diff", file.patch.split("\n").slice(2))}`);
+    const exit = typeof card.metadata.exit === "number" && card.metadata.exit !== 0 ? [`> ✗ exited with code ${card.metadata.exit}`] : [];
+    return this.block([`> **${card.title}**`, ...shellOutput, ...diffs, ...exit].join("\n\n"));
   }
 
   handle(event: TurnEvent): Delta[] {
     if (event.kind === "question" || event.kind === "permission-ask") return [];
     if (event.kind === "permission") {
       if (!event.allowed) this.rejectedToolCalls.add(event.request.toolCall.toolCallId);
+      if (event.shown) return [];
       const verdict = event.byUser ? `${event.allowed ? "allowed" : "rejected"} by you`
         : event.allowed ? "allowed" : `rejected by bridge policy (${event.reason ?? "no matching rule"})`;
       return this.block(`> **Permission** ${verdict}: ${permissionLabel(event.request)}`);
@@ -274,9 +323,12 @@ export class TurnRenderer {
     rawInput?: unknown;
     _meta?: Record<string, unknown> | null;
   }): Delta[] {
-    const state = this.tools.get(update.toolCallId) ?? { title: "Tool", paths: [], announced: false, held: [], diffs: [] };
+    const state = this.tools.get(update.toolCallId) ?? { title: "Tool", paths: [], announced: false, held: [], files: [] };
     if (update.title) state.title = update.title;
     if (update.kind) state.kind = update.kind;
+    if (update.rawInput && typeof update.rawInput === "object" && !Array.isArray(update.rawInput)) state.rawInput = update.rawInput as Record<string, unknown>;
+    const devinTool = update._meta?.["cognition.ai/inferenceToolName"];
+    if (typeof devinTool === "string" && devinTool) state.devinTool = devinTool;
     if (update.locations?.length) state.paths = update.locations.map((location) => this.displayPath(location.path));
     state.command = commandOf(update.rawInput) ?? state.command;
     // Devin streams shell output in in_progress updates; the final completed update carries no content.
@@ -297,8 +349,15 @@ export class TurnRenderer {
       this.renderedDiffs.add(key);
       const hunks = unifiedDiff(item.oldText ?? "", item.newText);
       if (hunks.length) {
-        blocks.push(`${inlineCode(this.displayPath(item.path))}\n\n${fence("diff", hunks)}`);
-        state.diffs.push([this.displayPath(item.path), ...hunks].join("\n"));
+        const file = this.displayPath(item.path);
+        blocks.push(`${inlineCode(file)}\n\n${fence("diff", hunks)}`);
+        state.files.push({
+          file,
+          patch: [`--- ${file}`, `+++ ${file}`, ...hunks].join("\n"),
+          status: item.oldText ? "modified" : "added",
+          additions: hunks.filter((line) => line.startsWith("+")).length,
+          deletions: hunks.filter((line) => line.startsWith("-")).length,
+        });
       }
     }
     const finished = update.status === "completed" || update.status === "failed";
@@ -329,14 +388,50 @@ export class TurnRenderer {
       return this.flush();
     }
     state.held = [];
-    const parts = [
-      ...(state.kind === "execute" && state.output ? [clipLines(state.output, MAX_CARD_LINES)] : []),
-      ...state.diffs,
-      ...(state.kind === "execute" && state.exitCode ? [`Exit code ${state.exitCode}`] : []),
-      ...(failure && state.kind !== "execute" ? [`Failed: ${failure}`] : []),
-    ];
-    this.cards.push({ title: this.cardTitle(state), output: parts.join("\n\n") });
+    this.cards.push(this.card(state, failure));
     return [];
+  }
+
+  /** Picks the OpenCode tool whose renderer fits Devin's tool, and fills the input and metadata it reads. */
+  private card(state: ToolState, failure: string): ToolCard {
+    const title = this.cardTitle(state);
+    const raw = state.rawInput;
+    const failed = failure && state.kind !== "execute" ? `Failed: ${failure}` : "";
+    const output = [state.output ? clipLines(state.output, MAX_CARD_LINES) : "", failed].filter(Boolean).join("\n\n");
+    const path = stringField(raw, "file_path") ?? stringField(raw, "path");
+    const displayPath = path ? this.displayPath(path) : state.paths[0];
+    if (state.kind === "execute" && state.command) {
+      const workdir = stringField(raw, "workdir");
+      return {
+        title,
+        tool: "shell",
+        input: { command: state.command, ...(workdir ? { workdir: this.displayPath(workdir) } : {}) },
+        output: state.output ? clipLines(state.output, MAX_CARD_LINES) : "",
+        metadata: { ...(state.exitCode !== undefined ? { exit: state.exitCode } : {}), truncated: false },
+      };
+    }
+    if (state.files.length > 0) {
+      const summary = state.files.map((file) => `${file.status === "added" ? "Created" : "Edited"} ${file.file}`).join("\n");
+      return {
+        title,
+        tool: state.files.length === 1 ? "edit" : "patch",
+        input: state.files.length === 1 ? { path: state.files[0]!.file } : {},
+        output: [summary, failed].filter(Boolean).join("\n\n"),
+        metadata: { files: state.files, truncated: false },
+      };
+    }
+    if (state.kind === "read" && displayPath) {
+      return { title, tool: "read", input: { path: displayPath, ...numberField(raw, "offset"), ...numberField(raw, "limit") }, output, metadata: { truncated: false } };
+    }
+    const query = stringField(raw, "query");
+    if (state.kind === "search" && query) {
+      const include = stringField(raw, "file_pattern");
+      return { title, tool: "grep", input: { pattern: query, ...(displayPath ? { path: displayPath } : {}), ...(include ? { include } : {}) }, output, metadata: {} };
+    }
+    if (state.kind === "fetch" && query) return { title, tool: "websearch", input: { query }, output, metadata: {} };
+    const url = stringField(raw, "url");
+    if (state.kind === "fetch" && url) return { title, tool: "webfetch", input: { url }, output, metadata: {} };
+    return { title, tool: fallbackToolName(state), input: scalarInput(raw), output, metadata: {} };
   }
 
   private cardTitle(state: ToolState): string {

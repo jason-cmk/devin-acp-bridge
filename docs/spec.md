@@ -175,7 +175,7 @@ session ID in the `x-opencode-session` header (also `x-opencode-session-id`, `x-
   user/assistant turns plus the latest user message (`transcriptPrompt` in `src/sessions.ts`).
 - **System messages:** drop them. Devin has its own system prompt, and OpenCode's prompt describes tools that
   Devin does not have.
-- **`tools` array:** ignore it, except `question` (§6.12) and the plugin's `devin` card tool (§6.16). OpenCode sends
+- **`tools` array:** ignore it, except `question` (§6.12) and the plugin's `devin_card` tool (§6.16). OpenCode sends
   its tool definitions on every main-chat request (§11).
 - **Title requests:** never sent to Devin. The bridge waits up to 20 s for Devin's own title for the OpenCode
   session (`session_info_update`, also after the turn ended), then falls back to the first five words of the
@@ -307,8 +307,8 @@ new child and a new Devin session with the transcript (§6.2).
 | `POST` | `/v1/chat/completions` | Streaming (SSE). Non-streaming requests: buffer the same output and return one completion. |
 | `GET` | `/v1/commands` | Devin's slash commands for the `X-Devin-Cwd` project (§6.15): `{ data: [{ name, description, hint? }] }`. |
 | `POST` | `/v1/steer` | `{ session, text }` from the plugin (§6.14): `{ steered: true }` or `{ steered: false, reason }`. |
-| `GET` | `/v1/permissions/<callId>` | `{ title, action, resources, save, chained }` of a native permission check the bridge sent (§6.17), for the plugin's `devin_permission` tool; 404 if unknown. |
-| `GET` | `/v1/cards/<callId>` | `{ title, output }` of a tool card the bridge sent (§6.16), for the plugin's `devin` tool; 404 if unknown. |
+| `GET` | `/v1/permissions/<callId>` | `{ title, action, resources, save, chained }` of a native permission check the bridge sent (§6.17), for the plugin's `permission` tool; 404 if unknown. |
+| `GET` | `/v1/cards/<callId>` | `{ title, tool, input, output, metadata }` of a tool card the bridge sent (§6.16), for the plugin's `devin_card` tool; 404 if unknown. |
 | `GET` | `/healthz` | `{ status, pid, build, devin: "running" \| "stopped", sessions, busy, waitingForAnswer }`. No auth. No session content. |
 
 ### 6.10 Model selection
@@ -404,8 +404,9 @@ server plugin, `opencode-plugin/index.ts`.
   `{ "command": "<exact command>", "decision": "allow" }` to the policy file (atomic write; an invalid file is
   left as it is and the reply says the rule was not saved). `Reject`, custom text, a dismissal, a new message
   and the timeout all send the policy's reject response. The reply gets `> **Permission** allowed by you` or
-  `rejected by you`, and for `Always` a line that the rule was added.
-- **Native check first.** When the request offers the plugin's `devin_permission` tool, the bridge asks through
+  `rejected by you`, and for `Always` a line that the rule was added. After a native check (§6.17) the
+  `permission` card shows the decision, so only the `Always` line is added.
+- **Native check first.** When the request offers the plugin's `permission` tool, the bridge asks through
   OpenCode's own permission system instead (§6.17); this section is then the fallback.
 - **Fallback.** If the request offered neither tool, the bridge rejects at once with the usual policy line. A second question or permission that arrives while the turn is paused waits in order and is
   asked in the next response (`Turn` output queue).
@@ -437,29 +438,46 @@ server plugin, `opencode-plugin/index.ts`.
 
 ### 6.16 Tool cards (opt-in)
 
-- **Plugin option `toolCards: true`.** The plugin registers `devin` (`codemode: false`, so it is a top-level
-  tool). Its input is `{ title }` only. Its `execute` reads the card's output from `GET /v1/cards/<callId>`
-  with the call ID from its context, and sets `metadata.title`; it runs nothing. If the bridge does not have
-  the card, the output is `(output unavailable: …)`.
-- **Why the output is not in the input.** OpenCode's TUI draws a tool it does not know as one line,
-  `<tool> [key=value, …]`, from the string fields of the input, and ignores `metadata.title`. A click expands
-  the input fields and the tool output (§11.20). With `{ title }` only, the line reads
-  `✓ devin [title=Run git status]` and the output shows once, on click.
-- **Bridge.** When the request offers `devin`, `TurnRenderer` holds each tool's markdown back and, when
-  the tool finishes, produces a card `{ title, output }`: `Run <command>` or `<title> <paths>`, with shell
-  output (200 lines), diffs and a non-zero exit code. The turn ends the response with one `devin` call
-  per card and keeps the card by call ID (`CardStore`, newest 500); the request that carries its result
-  resumes the turn, as for questions. Rejected calls, and
-  tools still running at the end of the turn, stay markdown. A later request without the tool gets the card
-  as markdown.
+- **Plugin option `toolCards: true`.** The plugin registers an `execute.before` hook and then the tool
+  `devin_card` (`codemode: false`, any input). The hook sends every call whose ID starts with `devincard_` to
+  `devin_card`. `devin_card` runs nothing: its `execute` reads the card from `GET /v1/cards/<callId>` and returns
+  the card's output and metadata. If the bridge does not have the card, the output is `(output unavailable: …)`.
+- **Native renderers.** OpenCode's TUI picks a renderer by the tool name stored in the part, which is the name
+  the model streamed, not the name the hook chose (§11.23). So each card call names the OpenCode tool whose
+  renderer fits, with that tool's input and metadata shapes:
+
+  | Devin tool | Call | Input | Metadata |
+  | --- | --- | --- | --- |
+  | `execute` with a command | `shell` | `command`, `workdir` | `exit` |
+  | Diffs, one file | `edit` | `path` | `files: [{ file, patch, status, additions, deletions }]` |
+  | Diffs, several files | `patch` | none | the same `files` |
+  | `read` with a path | `read` | `path`, `offset`, `limit` | |
+  | `search` with a query | `grep` | `pattern`, `path`, `include` | |
+  | `fetch` with a query or URL | `websearch` / `webfetch` | `query` / `url` | |
+  | Anything else | Devin's `_meta["cognition.ai/inferenceToolName"]`; `mcp__<server>__<tool>` → `<server>_<tool>`; else the ACP kind | string, number and boolean fields of `rawInput`, first line, 200 characters | |
+
+  A fallback name that is an OpenCode tool name gets a `devin_` prefix, because that renderer expects another
+  input. The generic renderer draws `✓ <name> [key=value, …]`, as for an OpenCode MCP tool.
+- **Safety.** If OpenCode ran a card call itself, it would run the command or edit again. The bridge sends cards
+  only when the request offers `devin_card`, and the plugin registers the hook before that tool, so the offer
+  implies the hook. A plugin and bridge from different versions stay safe: an older plugin offers `devin`, not
+  `devin_card`, and an older bridge looks for `devin`. Without the plugin, OpenCode runs a call named `shell`
+  (§11.23).
+- **Bridge.** When the request offers `devin_card`, `TurnRenderer` holds each tool's markdown back and, when
+  the tool finishes, produces a card `{ title, tool, input, output, metadata }`. Shell output keeps 200 lines.
+  The turn ends the response with one call per card and keeps the card by call ID (`CardStore`, newest 500);
+  the request that carries its result resumes the turn, as for questions. Rejected calls, and tools still
+  running at the end of the turn, stay markdown. A later request without the tool gets the card as markdown.
+  The transcript replay (§6.2) uses message text only, so card calls do not reach Devin.
 - **Cost.** Each finished Devin tool is one more OpenCode step and one localhost round trip. An agent step
   limit can end OpenCode's loop early; the parked turn is then cancelled at the question timeout.
 
 ### 6.17 Native permission prompts
 
-- **Plugin option `nativePermissions`** (default on). The plugin registers `devin_permission` (`codemode:
-  false`). The bridge pauses as for a question (§6.13) but ends the response with a `devin_permission` call whose
-  input is `{ title }` only, and keeps the check by call ID (`/v1/permissions/<callId>`).
+- **Plugin option `nativePermissions`** (default on). The plugin registers `permission` (`codemode:
+  false`; OpenCode has no tool of that name). The bridge pauses as for a question (§6.13) but ends the response
+  with a `permission` call whose input is `{ title }` only, so the TUI draws `✓ permission [title=Run ls]` or
+  `✗ permission […]`, and keeps the check by call ID (`/v1/permissions/<callId>`).
 - **Check** (`nativePermission`). A shell command → action `bash`, resources `[command]`, `save` `[command]`, or
   `[]` for a chained command. An MCP rule → action `<rule>` (for example `mcp__slack__slack_read_channel`),
   resources and save `["*"]`. Anything else → `devin-other`, `[rule or title]`, no save. OpenCode's dialog draws
@@ -500,7 +518,7 @@ server plugin, `opencode-plugin/index.ts`.
 | Undo/revert in OpenCode | Reverts the transcript and Devin's edits in the worktree: OpenCode snapshots the worktree around each step (§11.15). Gitignored files are not in the snapshot. The next message replays the shortened transcript into a new Devin session. | None needed. |
 | OpenCode `/compact` (§11.19) | Would cost one or two Devin turns and move the conversation to a new Devin session that sees only OpenCode's summary. | The bridge answers the compaction prompt locally and keeps the same Devin session. Devin compacts its own context; `/devin:compact` forces it. |
 | Editing or retrying a message | Starts a new Devin session with a text transcript; Devin's tool state is lost. | No ACP fork or rewind exists (§11.14). |
-| OpenCode's own tools/permissions | Sent to the bridge but not used, except `question` (§6.12, §6.13), `todowrite` (§6.18) and the plugin's `devin` and `devin_permission` tools (§6.16, §6.17). | Bridge ignores the other `tools`. It never returns a call to OpenCode's edit or shell tools. |
+| OpenCode's own tools/permissions | Sent to the bridge but not used, except `question` (§6.12, §6.13), `todowrite` (§6.18) and the plugin's `devin_card` and `permission` tools (§6.16, §6.17). | Bridge ignores the other `tools`. It never returns a call to OpenCode's edit or shell tools. |
 
 ## 8. Milestones
 
@@ -525,17 +543,18 @@ server plugin, `opencode-plugin/index.ts`.
 | M16 | **Done 2026-11-05.** Native permission prompts (§6.17): OpenCode's own permission dialog, "Always" saves a bridge policy rule, `--auto` works. | Unit tests; TUI in tmux against real Devin: allow once, reject, always (repeat ran with no prompt), chained command offered no "Always", `--auto` (§11.22). |
 | M17 | **Done 2026-11-05.** Devin's plan as OpenCode todos (§6.18) with `experimental.todo`. | Unit tests; TUI in tmux: `# Todos` block and sidebar Todo panel, updated on a second turn (§11.22). |
 | M18 | **Done 2026-11-06.** No `devin` agent in the setup (§5.2, §6.11): users use OpenCode's `build` and `plan` agents, and `devin-bypass` stays opt-in. Test configs use `build`. | Docs and configs only; `e2e/` and `managed-e2e/` run on `build`. |
+| M19 | **Done 2026-11-06.** Native tool cards (§6.16): card calls name OpenCode's own tools (`shell`, `edit`, `read`, …) and the plugin's `execute.before` hook sends them to the no-op `devin_card` tool, so the TUI draws them with its own renderers. The permission tool is now `permission`, and a native check prints no extra markdown line. | Unit tests; fake-model probe (rerouted calls ran nothing; without the hook they ran); TUI in tmux against real Devin (§11.23). |
 
 ## 9. Test plan
 
-- **Unit (bun test, 193 tests):** elicitation ↔ question mapping, answer parsing and tool-result lookup
+- **Unit (bun test, 198 tests):** elicitation ↔ question mapping, answer parsing and tool-result lookup
   (`questions.test.ts`); turn pause, buffering, resume, question fallback, permission prompts, `Always allow`,
   steering, cards, todos, native permission checks and the output queue (`turn.test.ts`); askable decisions, prompt text, allow-once response,
   always-allow rule and policy append (`permissions.test.ts`); model catalog, exclude filter, thought levels
   and the `default` variant (`models.test.ts`); Devin title and title board (`titles.test.ts`); command filter
   and prompt (`commands.test.ts`); session keys, history check, transcript, images and OpenCode harness messages (`sessions.test.ts`); image parts, title
   detection, stop reasons and usage mapping (`openai.test.ts`); every rendered update type, fence tracking, usage, card
-  mode, the card tool call and the card store (`render.test.ts`); unified diff (`diff.test.ts`); policy matching, chained-command guard, `switch_bypass`
+  mode, the OpenCode tool each card is drawn as, the card tool call and the card store (`render.test.ts`); unified diff (`diff.test.ts`); policy matching, chained-command guard, `switch_bypass`
   never selected, reject reasons, policy loading (`permissions.test.ts`); token resolution and bearer check
   (`auth.test.ts`); agent-to-mode mapping and initial mode (`modes.test.ts`); `BUN_BE_BUN` removed from
   Devin's environment (`devin.test.ts`).
@@ -980,6 +999,36 @@ user's global config (which also loads this plugin, in managed mode) stayed out 
   dialog, file created.
 - `experimental.todo` is in `ConfigExperimental` ("Enable the experimental todowrite tool"). A three-item plan
   showed as `# Todos` in the chat and in the sidebar's Todo panel; a second turn updated both.
+
+### 11.23 Native tool cards (2026-11-06)
+
+Probe: a fake OpenAI server that streams scripted tool calls, `opencode --standalone` with `HOME` set to an empty
+directory, and a probe plugin. Then the real bridge and Devin in tmux.
+
+- OpenCode 2.2.5's tool runner calls the `execute.before` hooks with the streamed name, then looks up the tool by
+  the hook's `tool` value. A built-in hook (`opencode.tool.input.repair`) maps `bash` to `shell` the same way.
+- The stored part keeps the streamed name. Calls named `shell`, `read` and `edit`, sent by the hook to a probe
+  tool, were drawn as `$ <command>` with the output, `→ Explored: 1 read` and `← Edit <path>` with the diff from
+  `metadata.files`. No command ran and the file did not change.
+- When the probe plugin did not load ("configured plugin path must be a directory"), OpenCode ran the real
+  `shell` and `edit` calls. This is the reason for the offer rule in §6.16.
+- OpenCode's own `shell` metadata is `{ status, truncated, exit }`; `edit` metadata is `files: [{ file, patch,
+  status, additions, deletions }]`. The v2 shell tool is `shell`; `bash` exists only as an alias.
+- `websearch` and `grep` join the `→ Explored` group; `patch` draws each file (`← Patched a.txt`,
+  `# Created b.txt`); unknown names draw `✓ <name> [key=value]`.
+- Devin's tool calls carry `_meta["cognition.ai/inferenceToolName"]`, for example `kill_shell` or
+  `mcp__tradify-bigquery__execute_sql`. Raw inputs: `execute` `{ command, workdir?, timeout? }`, `read`
+  `{ file_path, offset?, limit? }`, `edit` `{ file_path, old_string, new_string }` or `{ file_path, content }`,
+  `search` `{ query, path, file_pattern? }`, web search (`fetch`) `{ query, num_results?, domain? }`.
+- Real Devin, six steps (two commands, read, search, edit, new file): every step drew natively, and Devin, not
+  OpenCode, made the edits.
+- Permission card (same day): the tool was renamed from `devin_permission` to `permission`, and the bridge no
+  longer prints `> **Permission** … by you` after a native check. Real Devin, two `touch` commands: Allow once →
+  `✓ permission [title=Run touch …-a]` then `$ touch …-a`, file created; Reject → `✗ permission […-b]`, step
+  "interrupted", no file; no `Permission` markdown line in either case. A plugin and bridge from different
+  versions disagree on the tool name, so the bridge falls back to the `question` prompt (§6.13).
+- Without an empty `HOME`, the user's global config also loaded the managed plugin into the session, and the
+  cards fell back to markdown.
 
 ## 12. References
 

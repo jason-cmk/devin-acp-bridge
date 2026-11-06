@@ -4,7 +4,7 @@ import type { TurnEvent } from "./devin";
 import type { Delta } from "./openai";
 import { allowOnceResponse, nativePermission, type NativePermission, PERMISSION_ALLOW, PERMISSION_ALWAYS, PERMISSION_NATIVE_ALWAYS, permissionQuestion } from "./permissions";
 import { elicitationResponse, questionsFromElicitation, type QuestionForm } from "./questions";
-import type { ToolCard, TurnRenderer } from "./render";
+import { CARD_CALL_PREFIX, type ToolCard, type TurnRenderer } from "./render";
 
 export type PendingQuestion = { callId: string; form: QuestionForm };
 export type TurnStep =
@@ -25,14 +25,15 @@ type Answers = string[][] | undefined;
 /**
  * A point where the response ends with one OpenCode tool call: a question (`form`), a tool card (`card`), a todo
  * list (`todos`) or a native permission check (`permission`, with `form` as the fallback). `resolve` returns the
- * output that reports the answer; it goes out before anything queued behind the pause.
+ * output that reports the answer; it goes out before anything queued behind the pause. `native` is true when the
+ * pause went out as the native permission check.
  */
 type Pause = {
   form?: QuestionForm;
   card?: ToolCard;
   todos?: PlanEntry[];
   permission?: NativePermission;
-  resolve: (answers: Answers) => Delta[] | void;
+  resolve: (answers: Answers, native?: boolean) => Delta[] | void;
 };
 type Item = { delta: Delta } | { pause: Pause };
 
@@ -80,7 +81,7 @@ export class Turn {
 
   /**
    * Attaches a response and resolves when the turn ends or pauses. `offers` says which tools the request offered:
-   * OpenCode's `question` and `todowrite`, and the plugin's `devin` card and `devin_permission` tools. A boolean
+   * OpenCode's `question` and `todowrite`, and the plugin's `devin_card` and `permission` tools. A boolean
    * is the `question` offer alone.
    */
   next(sink: (delta: Delta) => void, offers: Offers | boolean): Promise<TurnStep> {
@@ -107,7 +108,7 @@ export class Turn {
   answer(answers: Answers): void {
     const pending = this.pending;
     this.pending = undefined;
-    const report = pending?.resolve(answers) ?? [];
+    const report = pending?.resolve(answers, pending.native) ?? [];
     this.items.unshift(...report.map((delta) => ({ delta })));
     this.drain();
   }
@@ -157,14 +158,15 @@ export class Turn {
       pause: {
         form,
         permission: nativePermission(request, reason),
-        resolve: (answers) => {
+        resolve: (answers, native) => {
           const choice = answers?.[0]?.length === 1 ? answers[0][0] : undefined;
           // OpenCode's own "Always" can come for a call with no exact-command rule (a chained command); it then
           // allows once. In the question, "Always" is offered only when a rule can be saved.
           const always = (choice === PERMISSION_ALWAYS || choice === PERMISSION_NATIVE_ALWAYS) && event.remember !== undefined;
           const allowed = choice === PERMISSION_ALLOW || choice === PERMISSION_NATIVE_ALWAYS || always;
           event.respond(allowed ? allowOnceResponse(request) : event.fallback);
-          const report = this.renderer.handle({ kind: "permission", request, allowed, byUser: true });
+          // The native permission card already shows the user's decision; the question fallback needs the line.
+          const report = this.renderer.handle({ kind: "permission", request, allowed, byUser: true, ...(native ? { shown: true as const } : {}) });
           return always ? [...report, ...this.renderer.note(this.remember(event.remember!))] : report;
         },
       },
@@ -203,7 +205,8 @@ export class Turn {
   }
 
   private pause(pause: Pause): void {
-    const callId = this.newCallId();
+    // The plugin sends calls with the card prefix to its no-op card tool, never to the OpenCode tool they name.
+    const callId = pause.card ? `${CARD_CALL_PREFIX}${this.newCallId()}` : this.newCallId();
     const native = pause.permission !== undefined && this.offers.permission === true;
     this.pending = { ...pause, callId, native };
     const waiter = this.waiter!;

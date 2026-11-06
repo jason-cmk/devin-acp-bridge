@@ -144,7 +144,7 @@ export function permissionQuestion(request: RequestPermissionRequest, reason: Re
 }
 
 /** The plugin registers this tool; its `execute` asks OpenCode's own permission system (§6.17). */
-export const PERMISSION_TOOL = "devin_permission";
+export const PERMISSION_TOOL = "permission";
 /** The tool results that allow the call. Any other result, including an error, rejects it. */
 export const PERMISSION_ALLOWED_RESULT = "ALLOWED";
 /** The user chose "Always": allow, and save an exact-command allow rule to the bridge policy file. */
@@ -177,7 +177,7 @@ export function permissionToolCall(callId: string, permission: NativePermission)
   return { id: callId, type: "function", function: { name: PERMISSION_TOOL, arguments: JSON.stringify({ title: permission.title }) } };
 }
 
-/** The `devin_permission` tool result as the answer to the permission question: allow, always, or reject. */
+/** The `permission` tool result as the answer to the permission question: allow, always, or reject. */
 export function nativePermissionAnswer(result: string): string[][] | undefined {
   const text = result.trim();
   if (text === PERMISSION_ALLOWED_ALWAYS_RESULT) return [[PERMISSION_NATIVE_ALWAYS]];

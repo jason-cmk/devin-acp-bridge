@@ -162,7 +162,8 @@ In this mode the plugin only refreshes the model list.
   reply, at the start of a turn and again at the end if it changed.
 - Permission decisions, for example `> **Permission** rejected by bridge policy (reject rule): \`rm -rf build\``
   or `> **Permission** allowed by you: \`npm test\``. Devin tells its model that "the user" rejected the call,
-  even when the bridge policy rejected it.
+  even when the bridge policy rejected it. A decision made in OpenCode's own permission dialog shows as
+  `✓ permission [title=Run npm test]` or `✗ permission […]`, with no extra line.
 - Token usage for each turn, as Devin reports it, including cache reads. Cache writes stay in the input count,
   because OpenCode's OpenAI-compatible provider has no field for them.
 - Devin's questions in OpenCode's own question picker. Devin waits for your answer and then continues the same
@@ -175,9 +176,10 @@ In this mode the plugin only refreshes the model list.
   Set the plugin option `"commands": false` to hide them.
 - Messages you type while Devin works go to the running turn, and Devin reads them at its next step, as in the
   Devin CLI. Queued messages (OpenCode's queue delivery) still wait until the turn ends.
-- With the plugin option `"toolCards": true` (experimental), each Devin tool call shows as an OpenCode tool
-  card instead of a markdown line: `✓ devin [title=Run git status]`. Click the card to see the command output
-  or the diff.
+- With the plugin option `"toolCards": true` (experimental), each Devin tool call shows the way OpenCode shows
+  its own tools: `$ git status` with the output, `← Edit src/a.ts` with the diff, reads and searches under
+  `→ Explored`, and MCP calls as `✓ <server>_<tool> [key=value]`. OpenCode does not run these tools again; the
+  plugin sends each card to a tool that does nothing.
 
 ## Choose a model
 

@@ -17,7 +17,7 @@ its OpenCode config, options table and troubleshooting in step with the code.
 - `src/modes.ts` — OpenCode agent (`x-opencode-agent`) → Devin session mode (`build` → `accept-edits`, `plan` → `plan`,
   `devin-bypass` → `bypass`).
 - `src/permissions.ts` — policy file, permission decisions, the permission prompt text, "Always allow" rules
-  and the native permission check sent to the plugin's `devin_permission` tool.
+  and the native permission check sent to the plugin's `permission` tool.
 - `src/titles.ts` — Devin's session title for OpenCode's title request.
 - `src/commands.ts` — Devin slash commands exposed as `/devin:<name>`.
 - `src/models.ts` — Devin model catalog from ACP config options; exclude filter.
