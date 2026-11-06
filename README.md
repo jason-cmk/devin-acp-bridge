@@ -49,13 +49,14 @@ npm install        # or: bun install
 
 Add this to `~/.config/opencode/opencode.jsonc` (every project) or to a project's `opencode.jsonc`. With
 `opencode plugin add`, the `plugins` entry is already in the global config; add only the rest. With a clone,
-replace the path. Use one copy of the plugin only: a GitHub install and a clone path both loaded give two
-plugins that fight over the `devin` provider.
+use the absolute path to its `opencode-plugin` directory instead, for example
+`"/Users/you/src/devin-acp-bridge/opencode-plugin"`. Use one copy of the plugin only: a GitHub install and a
+clone path both loaded give two plugins that fight over the `devin` provider.
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugins": ["/absolute/path/to/devin-acp-bridge/opencode-plugin"],   // or "github:jason-cmk/devin-acp-bridge"
+  "plugins": ["github:jason-cmk/devin-acp-bridge"],
   "compaction": { "auto": false },
   // Devin's plan in OpenCode's todo list and sidebar panel. Without it the plan shows as a checklist.
   "experimental": { "todo": true }
@@ -123,7 +124,7 @@ Then set `baseURL` in the plugin options, which turns off managed mode, and defi
 {
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
-    { "package": "/absolute/path/to/devin-acp-bridge/opencode-plugin", "options": { "baseURL": "http://127.0.0.1:7317/v1" } }
+    { "package": "github:jason-cmk/devin-acp-bridge", "options": { "baseURL": "http://127.0.0.1:7317/v1" } }
   ],
   "providers": {
     "devin": {
@@ -199,7 +200,7 @@ Plugin options (use the object form in `plugins`):
 ```jsonc
 "plugins": [
   {
-    "package": "/absolute/path/to/devin-acp-bridge/opencode-plugin",   // or "github:jason-cmk/devin-acp-bridge"
+    "package": "github:jason-cmk/devin-acp-bridge",   // or the clone's opencode-plugin path
     "options": {
       "exclude": ["fusion-*"],   // default: hide Devin's fusion combinations
       "refreshMinutes": 5,       // default
