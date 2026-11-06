@@ -22,6 +22,17 @@ type ToolState = {
   finished?: boolean;
 };
 
+const SUBAGENT_CONTEXT = "cognition.ai/subagent_context";
+
+/**
+ * Devin marks each tool call of its own subagents with the subagent's ID. It sends no update after the first
+ * `tool_call`, so the call never finishes; the bridge shows only the parent's `run_subagent` and `read_subagent`.
+ */
+function isSubagentCall(meta: Record<string, unknown> | null | undefined): boolean {
+  const context = meta?.[SUBAGENT_CONTEXT] as { parentAgentId?: unknown } | undefined;
+  return typeof context?.parentAgentId === "string" && context.parentAgentId !== "root";
+}
+
 /** `promptTokens` includes `cachedTokens`, as OpenAI's `prompt_tokens` includes `cached_tokens`. */
 export type TurnUsage = { promptTokens: number; completionTokens: number; cachedTokens?: number };
 /** One changed file, in the shape of OpenCode's `edit` tool metadata. */
@@ -164,6 +175,7 @@ export class TurnRenderer {
   private readonly tools = new Map<string, ToolState>();
   private readonly renderedDiffs = new Set<string>();
   private readonly rejectedToolCalls = new Set<string>();
+  private readonly subagentToolCalls = new Set<string>();
   private queue: string[] = [];
   private inFence = false;
   private partialLine = "";
@@ -228,7 +240,7 @@ export class TurnRenderer {
         return this.plan(update.entries);
       case "usage_update": {
         const meta = update._meta ?? {};
-        if (meta["cognition.ai/subagent_context"]) return [];
+        if (meta[SUBAGENT_CONTEXT]) return [];
         const input = meta["cognition.ai/inputTokens"];
         const output = meta["cognition.ai/outputTokens"];
         const cacheRead = meta["cognition.ai/cachedReadTokens"];
@@ -323,6 +335,11 @@ export class TurnRenderer {
     rawInput?: unknown;
     _meta?: Record<string, unknown> | null;
   }): Delta[] {
+    if (this.subagentToolCalls.has(update.toolCallId)) return [];
+    if (isSubagentCall(update._meta)) {
+      this.subagentToolCalls.add(update.toolCallId);
+      return [];
+    }
     const state = this.tools.get(update.toolCallId) ?? { title: "Tool", paths: [], announced: false, held: [], files: [] };
     if (update.title) state.title = update.title;
     if (update.kind) state.kind = update.kind;

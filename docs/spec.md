@@ -194,6 +194,7 @@ try to execute them.
 | --- | --- |
 | `agent_message_chunk` (text) | The text, as is. |
 | `agent_thought_chunk` | Emitted as `delta.reasoning_content`. OpenCode shows it as a reasoning block when the model sets `compatibility.reasoningField` (verified in M0). |
+| `tool_call` of a Devin subagent (`_meta["cognition.ai/subagent_context"].parentAgentId` set and not `root`) | Not shown, nor any later update for that ID (§11.24). The parent's `run_subagent` and `read_subagent` calls show as normal tool lines. |
 | First `tool_call`/`tool_call_update` for an ID | One line: `> **Run** \`<command>\`` for `execute` tools; otherwise `> **<title>** \`<path>\`` (up to 3 paths, relative to the cwd when inside it). |
 | `execute` tool finishes (`completed` or `failed`) | The latest streamed output, first 20 lines, in a ` ```text ` fence. Devin streams output in `in_progress` updates and sends an empty `completed` update; `Exited with code N` placeholders are hidden. A non-zero `_meta.terminal_exit.exit_code` adds `> ✗ **<title>** exited with code N`. |
 | Other tool `failed` | `> ✗ **<title>** failed: <first line of error>`. Skipped when the bridge itself rejected the permission. |
@@ -544,6 +545,7 @@ server plugin, `opencode-plugin/index.ts`.
 | M17 | **Done 2026-11-05.** Devin's plan as OpenCode todos (§6.18) with `experimental.todo`. | Unit tests; TUI in tmux: `# Todos` block and sidebar Todo panel, updated on a second turn (§11.22). |
 | M18 | **Done 2026-11-06.** No `devin` agent in the setup (§5.2, §6.11): users use OpenCode's `build` and `plan` agents, and `devin-bypass` stays opt-in. Test configs use `build`. | Docs and configs only; `e2e/` and `managed-e2e/` run on `build`. |
 | M19 | **Done 2026-11-06.** Native tool cards (§6.16): card calls name OpenCode's own tools (`shell`, `edit`, `read`, …) and the plugin's `execute.before` hook sends them to the no-op `devin_card` tool, so the TUI draws them with its own renderers. The permission tool is now `permission`, and a native check prints no extra markdown line. | Unit tests; fake-model probe (rerouted calls ran nothing; without the hook they ran); TUI in tmux against real Devin (§11.23). |
+| M20 | **Done 2026-11-06.** Tool calls of Devin's own subagents are hidden (§6.3, §11.24): they never finish, so card mode printed them all as markdown at the end of the turn. | Unit tests; shape taken from a real crew review in `bridge-debug.ndjson`. |
 
 ## 9. Test plan
 
@@ -946,7 +948,7 @@ Captured with the M0 stub (`STUB_PORT=7318`) and `opencode serve` in `e2e/`, usi
 - Subagents: `@general …` sent as API text is a plain user message. OpenCode starts a subagent only when the
   model calls its `subagent` tool, and Devin never calls OpenCode tools. A `devin/*` model can still run as a
   subagent of another primary model; that request arrives with the child session's `x-opencode-session` and
-  becomes a new Devin session. Not tested.
+  becomes a new Devin session. Not tested. Devin's own subagents: §11.24.
 
 ### 11.20 Tool cards in the TUI (2026-11-05)
 
@@ -1029,6 +1031,26 @@ directory, and a probe plugin. Then the real bridge and Devin in tmux.
   versions disagree on the tool name, so the bridge falls back to the `question` prompt (§6.13).
 - Without an empty `HOME`, the user's global config also loaded the managed plugin into the session, and the
   cards fell back to markdown.
+
+### 11.24 Devin's subagents (2026-11-06)
+
+From `bridge-debug.ndjson`, a crew PR review where Devin ran two background subagents.
+
+- Devin starts a subagent with its `run_subagent` tool (`rawInput`: `title`, `profile`, `is_background`, `task`),
+  which completes at once with "Background subagent started.". It waits with `read_subagent` (`rawInput`:
+  `agent_id`, `block`, `timeout`), which completes with "Subagent completed." when the subagent ends.
+- Each tool call of a subagent arrives as one `tool_call` with `_meta["cognition.ai/subagent_context"]` =
+  `{ parentAgentId: "<agent_id>" }`; the ID is the subagent's own, the same as in `read_subagent`. Devin sends no
+  `tool_call_update` for these calls (85 calls, none with a status), and no `agent_message_chunk` from the
+  subagent reaches the client.
+- Top-level `usage_update`s come twice, once plain and once with `parentAgentId: "root"` and the same counts.
+  Main-agent tool calls carry no `subagent_context`.
+- Before: in card mode the bridge held each subagent call until it finished, which never happened, and
+  `finish()` printed all of them as markdown at the end of the turn. In markdown mode each showed as a tool line
+  when it arrived.
+- Change (`render.ts`): a tool update whose `parentAgentId` is set and not `root` is ignored, with every later
+  update for that ID. Showing them as cards would need the bridge to treat each call as finished on arrival, with
+  no output or status; not done.
 
 ## 12. References
 

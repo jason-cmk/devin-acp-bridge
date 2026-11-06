@@ -152,6 +152,24 @@ describe("TurnRenderer", () => {
     expect(renderer.usage).toEqual({ promptTokens: 900, completionTokens: 40 });
   });
 
+  test("hides the tool calls of Devin's subagents and keeps the parent's subagent calls", () => {
+    const subagent = { "cognition.ai/inferenceToolName": "grep", "cognition.ai/subagent_context": { parentAgentId: "7ae1f637" } };
+    const result = output(new TurnRenderer(cwd), [
+      update({ sessionUpdate: "tool_call", toolCallId: "p1", title: "Ran regression-reviewer-snags subagent Snags", rawInput: { profile: "regression-reviewer-snags", is_background: true }, _meta: { "cognition.ai/inferenceToolName": "run_subagent" } }),
+      update({ sessionUpdate: "tool_call_update", toolCallId: "p1", status: "completed", content: [{ type: "content", content: { type: "text", text: "Background subagent started." } }] }),
+      update({ sessionUpdate: "tool_call", toolCallId: "s1", title: "Search for 'ReadRawBill'", kind: "search", locations: [{ path: "/work/app" }], rawInput: { query: "ReadRawBill" }, _meta: subagent }),
+      update({ sessionUpdate: "tool_call_update", toolCallId: "s1", status: "completed" }),
+    ]);
+    expect(result).toBe("> **Ran regression-reviewer-snags subagent Snags**\n\n");
+  });
+
+  test("does not print held subagent tool calls at the end of a turn in card mode", () => {
+    const renderer = new TurnRenderer(cwd, { cards: true });
+    renderer.handle(update({ sessionUpdate: "tool_call", toolCallId: "s1", title: "Read file", kind: "read", locations: [{ path: "/work/app/a.ts" }], _meta: { "cognition.ai/subagent_context": { parentAgentId: "237eaaab" } } }));
+    expect(renderer.finish()).toEqual([]);
+    expect(renderer.takeCard()).toBeUndefined();
+  });
+
   test("keeps Devin's cache read count", () => {
     const renderer = new TurnRenderer(cwd);
     const meta = {

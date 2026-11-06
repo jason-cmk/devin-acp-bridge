@@ -154,7 +154,8 @@ In this mode the plugin only refreshes the model list.
 ## What you see
 
 - Devin's reply as normal OpenCode markdown, and its thinking as reasoning blocks.
-- One line per tool call, for example `> **Read file** \`src/app.ts\`` or `> **Run** \`git status\``.
+- One line per tool call, for example `> **Read file** \`src/app.ts\`` or `> **Run** \`git status\``. When Devin
+  runs its own subagents, you see the lines that start and wait for them, but not the subagents' tool calls.
 - Shell output (first 20 lines) and non-zero exit codes.
 - File edits as `diff` blocks.
 - Devin's plan in OpenCode's own todo list and sidebar panel, updated each time the plan changes. This needs
