@@ -1072,6 +1072,17 @@ From `bridge-debug.ndjson`, a crew PR review where Devin ran two background suba
 - Checked in manual mode only (`e2e/`). Managed mode adds the models with `ctx.provider.transform` in the same
   order; not checked, because a managed run would replace the user's own managed bridge.
 
+### 11.26 Bridge token in Devin's environment (2026-11-07)
+
+- The token unlocks `devin-bypass` (§11.9), and `x-devin-cwd` picks any existing directory. So the token gives
+  shell access as the user without permission checks.
+- `devinEnv` removed only `BUN_BE_BUN`. With `DEVIN_BRIDGE_TOKEN` set, every shell command that Devin ran could
+  see the token. A prompt-injected Devin could then call the bridge in bypass mode and skip the policy file.
+  `devinEnv` now also removes `DEVIN_BRIDGE_TOKEN`.
+- Not fixed: Devin runs as the user, so its tools may still read `~/.config/devin-acp-bridge/token` and edit
+  `policy.json`. The bridge reads the policy again on every permission request, so an edit works at once. Not
+  checked whether Devin's read and edit tools reach paths outside the project.
+
 ## 12. References
 
 - Devin CLI docs (local): `~/.local/share/devin/cli/_versions/3000.11.234/share/devin/docs/reference/commands.mdx` (`devin acp`)

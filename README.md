@@ -314,6 +314,15 @@ how many sessions the bridge holds, how many turns are running and how many wait
 - The bridge listens on `127.0.0.1` only.
 - Every API request needs the bridge token. The token is a local password between OpenCode and the bridge; it
   is not a Devin credential and never leaves your machine. To rotate it, delete the file and restart the bridge.
+- The token gives full control of Devin, including the `devin-bypass` agent, which runs every tool without a
+  permission check. Treat it like an SSH key: do not commit it, and do not paste it into a shared config.
+- The bridge removes `DEVIN_BRIDGE_TOKEN` from the environment of `devin acp`, so the shell commands that Devin
+  runs cannot see it. Devin runs as you, so it can still read the token file and the policy file if its tools
+  can reach `~/.config`. Do not add allow rules for commands that can send HTTP requests, such as `curl *`.
+- `DEVIN_BRIDGE_DEBUG=1` writes your prompts and Devin's replies to `bridge-debug.ndjson`. Turn it off and
+  delete the file when you finish debugging.
+- If you install the plugin from GitHub, pin it to a tag or commit. The plugin starts the bridge from its own
+  source.
 - The bridge never reads your Devin credentials. `devin acp` uses its own `devin auth login` store.
 - Every prompt is a Devin turn on your account. Usage and cost are Devin's.
 

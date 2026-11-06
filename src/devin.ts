@@ -49,9 +49,12 @@ export function debugLog(kind: string, params: unknown): void {
   if (debug) appendFileSync(join(logDir, "bridge-debug.ndjson"), `${JSON.stringify({ time: new Date().toISOString(), kind, params })}\n`);
 }
 
-/** The managed bridge runs with `BUN_BE_BUN=1` (managed.ts); Devin's shell would pass it to every Bun-compiled CLI. */
+/**
+ * The managed bridge runs with `BUN_BE_BUN=1` (managed.ts); Devin's shell would pass it to every Bun-compiled CLI.
+ * `DEVIN_BRIDGE_TOKEN` unlocks `devin-bypass`, so a shell command that Devin runs must not see it (§11.26).
+ */
 export function devinEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const { BUN_BE_BUN: _, ...rest } = env;
+  const { BUN_BE_BUN: _bun, DEVIN_BRIDGE_TOKEN: _token, ...rest } = env;
   return rest;
 }
 
