@@ -134,28 +134,18 @@ checked against https://opencode.ai/config.json and exercised against the M0 stu
       }
     }
   },
-  "agents": {
-    "devin": {
-      "description": "Send prompts to Devin through the local ACP bridge",
-      "mode": "primary",
-      // No "model" here: an agent model pin would override the model picked in /models.
-      "permissions": [
-        { "action": "edit", "resource": "*", "effect": "deny" },
-        { "action": "shell", "resource": "*", "effect": "deny" }
-      ]
-    }
-  },
   "compaction": { "auto": false },
   // Live Devin model list (§6.10). Options: baseURL, provider, exclude, refreshMinutes.
   "plugins": ["/absolute/path/to/devin-acp-bridge/opencode-plugin"]
 }
 ```
 
-Use: start the bridge, run `opencode`, and switch to the `devin` agent.
+Use: start the bridge, run `opencode`, pick a `devin/…` model, and use the `build` or `plan` agent (§6.11).
 
 An agent `system: ""` and a model `capabilities.tools: false` do **not** stop OpenCode from sending its own
 system prompt (about 80 KB) and tool definitions (§11). The bridge ignores both, so the config leaves those
-settings out. The agent's edit/shell deny rules stay as a safety net.
+settings out. Until M18 the config also defined a `devin` agent that denied OpenCode's edit and shell tools as a
+safety net. The bridge never calls those tools, and since M12 `build` gets the same Devin mode, so M18 dropped it.
 
 ## 6. Detailed design
 
@@ -360,7 +350,8 @@ server plugin, `opencode-plugin/index.ts`.
   (§11.1).
 - **Bridge** (`src/modes.ts`). `build` → Devin mode `accept-edits`; `plan` → Devin mode `plan`; `devin-bypass` →
   Devin mode `bypass`. Any other agent (for
-  example the `devin` agent in the README) or no header → the mode the session started with (`accept-edits`).
+  example a user-defined agent with a `steps` limit) or no header → the mode the session started with
+  (`accept-edits`).
   The bridge sends `session/set_config_option` (`configId: "mode"`) before the turn, only when the mode differs
   from the session's current mode, so switching agents mid-conversation applies to the next turn. A rejected
   value returns 400, as for models.
@@ -368,7 +359,8 @@ server plugin, `opencode-plugin/index.ts`.
   the policy file, the chained-command guard and permission prompts. The bridge selects it only for an agent
   with that exact name, which the user defines in their OpenCode config (opt-in). An unmapped agent returns the
   session to its starting mode, so leaving `devin-bypass` ends `bypass` on the next turn. OpenCode's `--auto`
-  does not reach Devin: Devin runs its own tools, and the bridge's prompts are `question` tool calls.
+  answers the native permission prompts (§6.17) but leaves Devin in `accept-edits`, so policy `reject` rules
+  still apply.
 
 ### 6.12 Questions (Devin's `ask_user_question` → OpenCode's `question` tool)
 
@@ -472,7 +464,7 @@ server plugin, `opencode-plugin/index.ts`.
   `[]` for a chained command. An MCP rule → action `<rule>` (for example `mcp__slack__slack_read_channel`),
   resources and save `["*"]`. Anything else → `devin-other`, `[rule or title]`, no save. OpenCode's dialog draws
   `bash` as "Shell command" with the command and any other action as "Call tool <action>" (§11.22). OpenCode's
-  `shell` action is never used, so the `devin` agent's `shell` deny does not block Devin.
+  `shell` action is never used, so an agent that denies OpenCode's `shell` does not block Devin.
 - **Plugin `execute`.** Reads the check by `context.id`, then `ctx.permission.assert({ action, resources, save,
   metadata: { devinBridge: true, … }, source: { type: "tool", … } })`. Allowed → result `ALLOWED`, or
   `ALLOWED_ALWAYS` when the `permission.replied` event for this call says `always` (the plugin maps
@@ -480,8 +472,8 @@ server plugin, `opencode-plugin/index.ts`.
   OpenCode ends the step as for its own tools.
 - **No allow from rules.** OpenCode's agents start with `* allow`, so an unmatched action is allowed. The plugin's
   `evaluate` hook turns `allow` into `ask` for checks with `devinBridge: true`; `deny` stays. Allow rules belong
-  in the bridge policy file. A plugin `agent.transform` could not insert a rule instead: config agents such as
-  `devin` are not in its list.
+  in the bridge policy file. A plugin `agent.transform` could not insert a rule instead: agents from
+  `opencode.jsonc` are not in its list.
 - **Bridge answer** (`nativePermissionAnswer`). `ALLOWED` → allow once; `ALLOWED_ALWAYS` → allow once and append
   the exact-command rule to the policy file when `alwaysAllowRule` gives one; anything else, including an error
   result, rejects. A rejection ends OpenCode's step without a result, so the turn stays parked; the next message
@@ -508,7 +500,7 @@ server plugin, `opencode-plugin/index.ts`.
 | Undo/revert in OpenCode | Reverts the transcript and Devin's edits in the worktree: OpenCode snapshots the worktree around each step (§11.15). Gitignored files are not in the snapshot. The next message replays the shortened transcript into a new Devin session. | None needed. |
 | OpenCode `/compact` (§11.19) | Would cost one or two Devin turns and move the conversation to a new Devin session that sees only OpenCode's summary. | The bridge answers the compaction prompt locally and keeps the same Devin session. Devin compacts its own context; `/devin:compact` forces it. |
 | Editing or retrying a message | Starts a new Devin session with a text transcript; Devin's tool state is lost. | No ACP fork or rewind exists (§11.14). |
-| OpenCode's own tools/permissions | Sent to the bridge but not used, except `question` (§6.12, §6.13), `todowrite` (§6.18) and the plugin's `devin` and `devin_permission` tools (§6.16, §6.17). | Bridge ignores the other `tools`; agent denies edit/shell as a safety net. |
+| OpenCode's own tools/permissions | Sent to the bridge but not used, except `question` (§6.12, §6.13), `todowrite` (§6.18) and the plugin's `devin` and `devin_permission` tools (§6.16, §6.17). | Bridge ignores the other `tools`. It never returns a call to OpenCode's edit or shell tools. |
 
 ## 8. Milestones
 
@@ -532,6 +524,7 @@ server plugin, `opencode-plugin/index.ts`.
 | M15 | **Done 2026-11-05.** Cache reads in `usage` (§6.4): Devin's `cachedReadTokens` → `prompt_tokens_details.cached_tokens`. | Unit tests; `opencode run` showed `cache.read` (§11.21). |
 | M16 | **Done 2026-11-05.** Native permission prompts (§6.17): OpenCode's own permission dialog, "Always" saves a bridge policy rule, `--auto` works. | Unit tests; TUI in tmux against real Devin: allow once, reject, always (repeat ran with no prompt), chained command offered no "Always", `--auto` (§11.22). |
 | M17 | **Done 2026-11-05.** Devin's plan as OpenCode todos (§6.18) with `experimental.todo`. | Unit tests; TUI in tmux: `# Todos` block and sidebar Todo panel, updated on a second turn (§11.22). |
+| M18 | **Done 2026-11-06.** No `devin` agent in the setup (§5.2, §6.11): users use OpenCode's `build` and `plan` agents, and `devin-bypass` stays opt-in. Test configs use `build`. | Docs and configs only; `e2e/` and `managed-e2e/` run on `build`. |
 
 ## 9. Test plan
 

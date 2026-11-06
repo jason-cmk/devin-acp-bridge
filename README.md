@@ -56,25 +56,15 @@ plugins that fight over the `devin` provider.
 {
   "$schema": "https://opencode.ai/config.json",
   "plugins": ["/absolute/path/to/devin-acp-bridge/opencode-plugin"],   // or "github:jason-cmk/devin-acp-bridge"
-  "agents": {
-    "devin": {
-      "description": "Send prompts to Devin through the local ACP bridge",
-      "mode": "primary",
-      // Safety net: OpenCode's own edit and shell tools stay off. Devin uses its own.
-      "permissions": [
-        { "action": "edit", "resource": "*", "effect": "deny" },
-        { "action": "shell", "resource": "*", "effect": "deny" }
-      ]
-    }
-  },
   "compaction": { "auto": false },
   // Devin's plan in OpenCode's todo list and sidebar panel. Without it the plan shows as a checklist.
   "experimental": { "todo": true }
 }
 ```
 
-Do not add a `"model"` to the `devin` agent: it overrides the model you pick in `/models`. Do not define a
-`devin` provider yourself: the plugin registers it.
+Do not define a `devin` provider yourself: the plugin registers it. You need no extra agent: use OpenCode's
+`build` and `plan` agents (see [Devin mode per OpenCode agent](#devin-mode-per-opencode-agent)). Devin runs its
+own tools, so OpenCode's edit and shell tools are never called.
 
 ### 3. Restart OpenCode and use it
 
@@ -83,7 +73,8 @@ opencode service restart   # loads the plugin in the background service
 opencode
 ```
 
-Switch to the `devin` agent and pick a `devin/…` model in `/models`. Check that it works without the TUI:
+Pick a `devin/…` model in `/models`. Use `build` for normal work and `plan` for read-only work (Tab switches).
+Check that it works without the TUI:
 
 ```bash
 opencode run -m devin/devin "Reply with READY only. Do not use any tools."
@@ -158,7 +149,7 @@ Then set `baseURL` in the plugin options, which turns off managed mode, and defi
 }
 ```
 
-Add the `devin` agent from step 2 as well. In this mode the plugin only refreshes the model list.
+In this mode the plugin only refreshes the model list.
 
 ## What you see
 
@@ -277,26 +268,27 @@ match before the turn:
 | `build` | `accept-edits` | Edits apply; other tools ask; the policy file decides, then you. |
 | `plan` | `plan` | Devin's plan mode, for read-only work. Calls that Devin asks about still go through the policy file, then to you. |
 | `devin-bypass` | `bypass` | Devin runs every tool without asking. **The policy file, the chained-command guard and permission prompts do not apply.** |
-| any other (for example `devin`) | `accept-edits` | Devin's default: edits apply, other tools ask; the policy file decides, then you. |
+| any other | `accept-edits` | Devin's default: edits apply, other tools ask; the policy file decides, then you. |
 
 Switching agents in the middle of a conversation changes the mode for the next turn. Leaving `devin-bypass`
 for any other agent ends `bypass` on the next turn. OpenCode's `--auto` flag allows the calls Devin asks about,
 but Devin still runs in `accept-edits` mode and the bridge policy file still rejects its `reject` rules.
 
-`devin-bypass` is opt-in: the bridge uses `bypass` only for an agent with that exact name. To use it, add a
-second agent next to `devin` and switch to it (Tab) only in a project where you accept that Devin runs shell
-commands with no check:
+`devin-bypass` is opt-in: the bridge uses `bypass` only for an agent with that exact name. To use it, add it
+under `"agents"` and switch to it (Tab) only in a project where you accept that Devin runs shell commands with
+no check:
 
 ```jsonc
-"devin-bypass": {
-  "description": "Devin through the bridge in bypass mode: no permission checks",
-  "mode": "primary",
-  "permissions": [
-    { "action": "edit", "resource": "*", "effect": "deny" },
-    { "action": "shell", "resource": "*", "effect": "deny" }
-  ]
+"agents": {
+  "devin-bypass": {
+    "description": "Devin through the bridge in bypass mode: no permission checks",
+    "mode": "primary"
+  }
 }
 ```
+
+You can also define your own agent for Devin, for example to set a `steps` limit for tool cards. Do not give it
+a `"model"`: that overrides the model you pick in `/models`. The bridge treats it like `build`.
 
 ## Configuration
 

@@ -1,17 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "model": "devin/devin",
-  "default_agent": "devin",
-  "agents": {
-    "devin": {
-      "description": "Send prompts to Devin through the local ACP bridge",
-      "mode": "primary",
-      "permissions": [
-        { "action": "edit", "resource": "*", "effect": "deny" },
-        { "action": "shell", "resource": "*", "effect": "deny" }
-      ]
-    }
-  },
   "compaction": { "auto": false },
   "plugins": ["../../opencode-plugin"]
 }
