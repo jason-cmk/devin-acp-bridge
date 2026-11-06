@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionConfigOption } from "@agentclientprotocol/sdk";
-import { filterModels, modelCatalog, thoughtLevelFor, thoughtLevels } from "./models";
+import { filterModels, modelCatalog, sortModels, thoughtLevelFor, thoughtLevels } from "./models";
 
 const options = [
   { id: "mode", name: "Session Mode", type: "select", currentValue: "accept-edits", options: [{ value: "accept-edits", name: "Code" }] },
@@ -32,6 +32,50 @@ describe("modelCatalog", () => {
 
   test("returns an empty catalog when Devin sends no model option", () => {
     expect(modelCatalog(undefined)).toEqual({ models: [] });
+  });
+});
+
+describe("sortModels", () => {
+  const ids = (models: { id: string }[]) => models.map((model) => model.id);
+
+  test("groups models by provider, providers A-Z, and sorts names with numbers compared as numbers", () => {
+    const models = [
+      { id: "swe-2-high", name: "SWE-2" },
+      { id: "gpt-6-1-sol-medium", name: "GPT-6.1 Sol" },
+      { id: "claude-sonnet-5-5-medium", name: "Claude Sonnet 5.5" },
+      { id: "gpt-6-astra-medium", name: "GPT-6 Astra" },
+      { id: "adaptive", name: "Adaptive" },
+      { id: "gpt-5-6-terra-medium", name: "GPT-5.6 Terra" },
+      { id: "claude-fable-5-1-medium", name: "Claude Fable 5.1" },
+      { id: "swe-1-7-medium", name: "SWE-1.7" },
+    ];
+    expect(ids(sortModels(models))).toEqual([
+      "adaptive",
+      "claude-fable-5-1-medium",
+      "claude-sonnet-5-5-medium",
+      "gpt-5-6-terra-medium",
+      "gpt-6-astra-medium",
+      "gpt-6-1-sol-medium",
+      "swe-1-7-medium",
+      "swe-2-high",
+    ]);
+  });
+
+  test("sorts models with the same name by thought level, low to high", () => {
+    const models = ["max", "high", "low", "xhigh", "medium"].map((level) => ({ id: `claude-opus-5-5-${level}`, name: "Claude Opus 5.5" }));
+    expect(ids(sortModels(models))).toEqual([
+      "claude-opus-5-5-low",
+      "claude-opus-5-5-medium",
+      "claude-opus-5-5-high",
+      "claude-opus-5-5-xhigh",
+      "claude-opus-5-5-max",
+    ]);
+  });
+
+  test("does not change the list it is given", () => {
+    const models = [{ id: "gpt-6-luna-medium", name: "GPT-6 Luna" }, { id: "claude-opus-5-5-medium", name: "Claude Opus 5.5" }];
+    sortModels(models);
+    expect(ids(models)).toEqual(["gpt-6-luna-medium", "claude-opus-5-5-medium"]);
   });
 });
 

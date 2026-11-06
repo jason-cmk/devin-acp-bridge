@@ -320,6 +320,10 @@ server plugin, `opencode-plugin/index.ts`.
 - **Bridge catalog.** Devin reports its models only per session, as the `model` config option. The bridge reads
   them from every real `session/new`; while idle it refreshes at most every 15 min with a throwaway session
   that it deletes again. A `devin acp` restart clears the catalog.
+- **Order.** `modelCatalog` sorts the models (`sortModels`): by provider, the first part of the ID, A–Z; in a
+  provider, by name A–Z with numbers compared as numbers (`GPT-5.6`, `GPT-6`, `GPT-6.1`); then by the thought
+  level at the end of the ID, low to high. `/v1/models` keeps `devin` first. OpenCode's model picker keeps
+  this order (§11.25).
 - **Plugin.** On load (waiting up to 15 s for the first fetch) and every `refreshMinutes` (default 5) it fetches
   `/v1/models` with the bridge token (`DEVIN_BRIDGE_TOKEN`, else `~/.config/devin-acp-bridge/token`), drops
   IDs matching `exclude` (default `["fusion-*"]`), and registers the rest under the `devin` provider with
@@ -546,6 +550,7 @@ server plugin, `opencode-plugin/index.ts`.
 | M18 | **Done 2026-11-06.** No `devin` agent in the setup (§5.2, §6.11): users use OpenCode's `build` and `plan` agents, and `devin-bypass` stays opt-in. Test configs use `build`. | Docs and configs only; `e2e/` and `managed-e2e/` run on `build`. |
 | M19 | **Done 2026-11-06.** Native tool cards (§6.16): card calls name OpenCode's own tools (`shell`, `edit`, `read`, …) and the plugin's `execute.before` hook sends them to the no-op `devin_card` tool, so the TUI draws them with its own renderers. The permission tool is now `permission`, and a native check prints no extra markdown line. | Unit tests; fake-model probe (rerouted calls ran nothing; without the hook they ran); TUI in tmux against real Devin (§11.23). |
 | M20 | **Done 2026-11-06.** Tool calls of Devin's own subagents are hidden (§6.3, §11.24): they never finish, so card mode printed them all as markdown at the end of the turn. | Unit tests; shape taken from a real crew review in `bridge-debug.ndjson`. |
+| M21 | **Done 2026-11-06.** Models sorted by provider, then name, then thought level (§6.10). | Unit tests; `/v1/models` and the TUI model picker in tmux against real Devin, manual mode (§11.25). |
 
 ## 9. Test plan
 
@@ -1051,6 +1056,21 @@ From `bridge-debug.ndjson`, a crew PR review where Devin ran two background suba
 - Change (`render.ts`): a tool update whose `parentAgentId` is set and not `root` is ignored, with every later
   update for that ID. Showing them as cards would need the bridge to treat each call as finished on arrival, with
   no output or status; not done.
+
+### 11.25 Model order (2026-11-06)
+
+- Devin's `model` option lists models in no clear order (`adaptive`, `swe-2-high`, `swe-2-flash-medium`,
+  `claude-fable-5-1-medium`, `claude-opus-5-5-medium`, `gpt-6-astra-medium`, …). The bridge and the plugin
+  kept that order, and OpenCode's model picker showed it.
+- Devin lists each model once, with its default thought level at the end of the ID. The other levels are
+  OpenCode variants, not models, so the level tie-break applies only if Devin someday lists one model per
+  level. Devin sends `thought_level` values low to high already; the bridge does not sort them.
+- Provider is the first part of the ID, so `swe-*` (Cognition) is its own group, and `adaptive` is a group of
+  one. The default `exclude` hides `fusion-*`, which would otherwise be one group.
+- The TUI model picker (OpenCode 2.2.5) keeps the provider's model order when the search is empty. A search
+  ranks by match instead. `opencode models` sorts by ID itself, so it does not show the bridge order.
+- Checked in manual mode only (`e2e/`). Managed mode adds the models with `ctx.provider.transform` in the same
+  order; not checked, because a managed run would replace the user's own managed bridge.
 
 ## 12. References
 

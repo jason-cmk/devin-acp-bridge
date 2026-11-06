@@ -28,8 +28,35 @@ export function modelCatalog(configOptions: SessionConfigOption[] | null | undef
   const current = (option as { currentValue?: unknown }).currentValue;
   return {
     defaultModel: typeof current === "string" ? current : undefined,
-    models: selectValues(option).map(({ value, name }) => ({ id: value, name })),
+    models: sortModels(selectValues(option).map(({ value, name }) => ({ id: value, name }))),
   };
+}
+
+/** Devin's thought levels, lowest first. A model ID ends with its default level (`claude-opus-5-5-medium`). */
+const LEVEL_RANK = ["minimal", "low", "medium", "high", "xhigh", "max"];
+const nameOrder = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
+
+function providerOf(id: string): string {
+  return id.split("-")[0]!.toLowerCase();
+}
+
+function levelRankOf(id: string): number {
+  const rank = LEVEL_RANK.indexOf(id.slice(id.lastIndexOf("-") + 1));
+  return rank === -1 ? LEVEL_RANK.length : rank;
+}
+
+/**
+ * Groups models by provider (the first part of the ID), providers A–Z. In a group, names sort A–Z with numbers
+ * compared as numbers, so `GPT-5.6` comes before `GPT-6`. Models with the same name sort by level, low to high.
+ */
+export function sortModels(models: DevinModel[]): DevinModel[] {
+  return [...models].sort(
+    (a, b) =>
+      providerOf(a.id).localeCompare(providerOf(b.id)) ||
+      nameOrder.compare(a.name, b.name) ||
+      levelRankOf(a.id) - levelRankOf(b.id) ||
+      a.id.localeCompare(b.id),
+  );
 }
 
 /** OpenCode reports the variant `default` when the user picked none; that means the model's own level. */
