@@ -58,9 +58,42 @@ export function devinEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEn
   return rest;
 }
 
+export type SpawnCommand = { file: string; args: string[]; shell: boolean };
+
+/**
+ * On Windows, `devin` can be a `.cmd` or `.bat` shim. Node and Bun refuse to spawn those without a shell, so
+ * the bridge runs them through `cmd.exe` with the path quoted. Elsewhere the command runs as given.
+ */
+export function devinSpawnCommand(
+  command: string[],
+  platform: NodeJS.Platform = process.platform,
+  which: (name: string) => string | null = Bun.which,
+): SpawnCommand {
+  const [name, ...args] = command;
+  if (platform !== "win32") return { file: name!, args, shell: false };
+  const found = which(name!);
+  // cmd.exe expands `%VAR%` even inside quotes, so such a path is not safe to quote.
+  const path = found && !/[%"]/.test(found) ? found : name!;
+  if (/\.(cmd|bat)$/i.test(path)) return { file: `"${path}"`, args, shell: true };
+  return { file: path, args, shell: false };
+}
+
+/** On Windows a shim runs under `cmd.exe`, and `kill()` would end only `cmd.exe`, so `taskkill /T` ends the tree. */
+function killTree(child: ChildProcess): void {
+  if (process.platform === "win32" && child.pid !== undefined) {
+    spawn("taskkill", ["/T", "/F", "/PID", String(child.pid)], { stdio: "ignore", windowsHide: true }).on("error", () => child.kill());
+  } else {
+    child.kill();
+  }
+}
+
 /** One long-lived `devin acp` child shared by every session. Restarted on the next call after it exits. */
 export class DevinAgent {
   private connection?: Promise<Connection>;
+  /** Set at spawn, before `initialize` answers, so `stop` can end a child that never finished starting. */
+  private child?: ChildProcess;
+  /** After `stop`, no call may start a new child: the bridge would exit and leave it running. */
+  private stopped = false;
   private readonly listeners = new Map<string, (event: TurnEvent) => void>();
   private readonly exitHandlers: Array<() => void> = [];
   private readonly updateHandlers: Array<(sessionId: string, update: SessionUpdate) => void> = [];
@@ -82,6 +115,7 @@ export class DevinAgent {
   }
 
   private connect(): Promise<Connection> {
+    if (this.stopped) return Promise.reject(new Error("The bridge is stopping."));
     this.connection ??= this.start().catch((error) => {
       this.connection = undefined;
       throw error;
@@ -91,11 +125,14 @@ export class DevinAgent {
 
   private async start(): Promise<Connection> {
     mkdirSync(logDir, { recursive: true });
-    const child = spawn(this.command[0]!, this.command.slice(1), { stdio: ["pipe", "pipe", "pipe"], env: devinEnv() });
+    const { file, args, shell } = devinSpawnCommand(this.command);
+    const child = spawn(file, args, { stdio: ["pipe", "pipe", "pipe"], env: devinEnv(), shell, windowsHide: true });
+    this.child = child;
     child.stderr!.pipe(createWriteStream(join(logDir, "devin-acp.log"), { flags: "a" }));
     const exited = new Promise<never>((_, reject) => {
       child.once("exit", (code, signal) => {
         console.error(`devin acp exited (code=${code}, signal=${signal}); restarting on next request`);
+        if (this.child === child) this.child = undefined;
         this.connection = undefined;
         this.exitHandlers.forEach((handler) => handler());
         reject(new Error(`The Devin agent process exited (code=${code}, signal=${signal}).`));
@@ -263,7 +300,17 @@ export class DevinAgent {
     await agent.notify("session/cancel", { sessionId });
   }
 
-  stop(): void {
-    this.connection?.then(({ child }) => child.stdin?.end()).catch(() => {});
+  /**
+   * Closes Devin's stdin so it exits by itself, then kills it after `graceMs`. Windows does not end a child when
+   * its parent exits, so the bridge makes sure `devin acp` has ended before the bridge exits.
+   */
+  async stop(graceMs = 2000): Promise<void> {
+    this.stopped = true;
+    const child = this.child;
+    if (!child || child.exitCode !== null || child.signalCode !== null) return;
+    const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    child.stdin?.end();
+    await Promise.race([exited, Bun.sleep(graceMs)]);
+    if (child.exitCode === null && child.signalCode === null) killTree(child);
   }
 }

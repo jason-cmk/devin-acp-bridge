@@ -308,6 +308,7 @@ new child and a new Devin session with the transcript (§6.2).
 | `POST` | `/v1/chat/completions` | Streaming (SSE). Non-streaming requests: buffer the same output and return one completion. |
 | `GET` | `/v1/commands` | Devin's slash commands for the `X-Devin-Cwd` project (§6.15): `{ data: [{ name, description, hint? }] }`. |
 | `POST` | `/v1/steer` | `{ session, text }` from the plugin (§6.14): `{ steered: true }` or `{ steered: false, reason }`. |
+| `POST` | `/v1/shutdown` | Stops the bridge (§11.27): `{ stopping: true, pid }`, then the same stop as SIGTERM. The plugin uses it to replace a stale bridge, because Windows has no SIGTERM handler. |
 | `GET` | `/v1/permissions/<callId>` | `{ title, action, resources, save, chained }` of a native permission check the bridge sent (§6.17), for the plugin's `permission` tool; 404 if unknown. |
 | `GET` | `/v1/cards/<callId>` | `{ title, tool, input, output, metadata }` of a tool card the bridge sent (§6.16), for the plugin's `devin_card` tool; 404 if unknown. |
 | `GET` | `/healthz` | `{ status, pid, build, devin: "running" \| "stopped", sessions, busy, waitingForAnswer }`. No auth. No session content. |
@@ -551,6 +552,7 @@ server plugin, `opencode-plugin/index.ts`.
 | M19 | **Done 2026-11-06.** Native tool cards (§6.16): card calls name OpenCode's own tools (`shell`, `edit`, `read`, …) and the plugin's `execute.before` hook sends them to the no-op `devin_card` tool, so the TUI draws them with its own renderers. The permission tool is now `permission`, and a native check prints no extra markdown line. | Unit tests; fake-model probe (rerouted calls ran nothing; without the hook they ran); TUI in tmux against real Devin (§11.23). |
 | M20 | **Done 2026-11-06.** Tool calls of Devin's own subagents are hidden (§6.3, §11.24): they never finish, so card mode printed them all as markdown at the end of the turn. | Unit tests; shape taken from a real crew review in `bridge-debug.ndjson`. |
 | M21 | **Done 2026-11-06.** Models sorted by provider, then name, then thought level (§6.10). | Unit tests; `/v1/models` and the TUI model picker in tmux against real Devin, manual mode (§11.25). |
+| M22 | **Done 2026-11-07.** Windows groundwork (§11.27): `POST /v1/shutdown`, one stop path that also ends `devin acp`, `windowsHide` on both spawns, `.cmd`/`.bat` shims for `devin`. | Unit tests; managed replace on macOS stopped the old bridge and its Devin child with no signal. Not run on Windows. |
 
 ## 9. Test plan
 
@@ -1082,6 +1084,37 @@ From `bridge-debug.ndjson`, a crew PR review where Devin ran two background suba
 - Not fixed: Devin runs as the user, so its tools may still read `~/.config/devin-acp-bridge/token` and edit
   `policy.json`. The bridge reads the policy again on every permission request, so an edit works at once. Not
   checked whether Devin's read and edit tools reach paths outside the project.
+
+### 11.27 Windows groundwork (2026-11-07)
+
+- Windows has no signals. `process.kill(pid, "SIGTERM")` ends the process at once, so the bridge's SIGTERM
+  handler never runs: `bridge.json` stays (harmless, `/healthz` fails) and `devin acp` is not told to stop.
+  Windows does not end child processes with their parent, so the child could keep running.
+- Fix: `POST /v1/shutdown` (token required) runs the same `shutdown()` as SIGINT and SIGTERM. `shutdown()`
+  removes `bridge.json` if this bridge owns it, stops new connections, closes Devin's stdin, kills Devin if it is
+  still alive after 2 s, and exits. Exit is bounded at 3 s even if ending Devin hangs. `ensureBridge` asks a stale
+  bridge to shut down first and sends a signal only when the request fails (an older build, or a bridge with
+  another token).
+- `DevinAgent.stop` keeps the child from the moment it spawns, so it also ends a Devin that never answered
+  `initialize`. After `stop`, `connect` refuses to start a new child: an in-flight request would otherwise start one
+  that the exiting bridge leaves behind. On Windows the kill uses `taskkill /T`, because a `.cmd` shim's child is
+  `cmd.exe` and `kill()` would not reach Devin.
+- Visible change on every platform: a turn that is streaming at shutdown now sees Devin exit first, so it can end
+  with `_The bridge could not complete the Devin turn_` before the connection drops. Before, the bridge exited at
+  once and the stream was cut. Not run against a live turn.
+- Both spawns set `windowsHide`, so a detached bridge or its Devin child opens no console window.
+- `devin` found by `Bun.which` as a `.cmd` or `.bat` shim runs through the shell with the path quoted, because
+  Node and Bun refuse to spawn batch files without a shell. A path with `%` or `"` falls back to the bare name:
+  `cmd.exe` expands `%VAR%` even inside quotes.
+- `POST /v1/shutdown` with no token or a wrong token returns 401 and the bridge keeps running (checked on macOS).
+- Known, not fixed: on a first run several plugin instances can each create the token file, because `resolveToken`
+  does not use exclusive create. A losing instance gets 401 until its next refresh reads the file again.
+- macOS check: a managed bridge with Devin running was replaced by a new build in 406 ms. No signal was sent; the
+  old bridge and its Devin child had both exited. SIGTERM on the new bridge still removed `bridge.json`.
+- A bridge stopped during the background thought-level probe logs `ACP connection closed`; the probe's throwaway
+  session may stay in Devin's list.
+- Not checked: any of this on Windows, and whether the Devin CLI ships for Windows. `mode: 0o600` on the token and
+  policy files has no effect there; the user profile's ACLs protect them instead.
 
 ## 12. References
 

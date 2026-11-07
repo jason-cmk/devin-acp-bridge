@@ -19,7 +19,7 @@ public interfaces of both tools, which can change.
 - [OpenCode](https://opencode.ai) v2. Tested with 2.2.5.
 - For a clone install only: `npm` or [Bun](https://bun.sh) once, to install dependencies. At runtime the bridge
   uses the Bun that is built into OpenCode.
-- macOS or Linux.
+- macOS or Linux. Windows is untested (see Troubleshooting).
 
 ## Set up
 
@@ -309,6 +309,9 @@ Environment variables are read by the bridge. In managed mode it inherits them f
 `GET http://127.0.0.1:<port>/healthz` (no token) reports the bridge's PID and build, whether Devin is running,
 how many sessions the bridge holds, how many turns are running and how many wait for an answer to a question. In managed mode the port is in `~/.cache/devin-acp-bridge/bridge.json`.
 
+To stop a bridge, send `POST http://127.0.0.1:<port>/v1/shutdown` with the token, or send it SIGTERM. Both stop
+`devin acp` too. The plugin starts a new bridge on its next refresh.
+
 ## Security
 
 - The bridge listens on `127.0.0.1` only.
@@ -345,6 +348,7 @@ how many sessions the bridge holds, how many turns are running and how many wait
 | `> **Question** cancelled: OpenCode did not offer its question tool.` | The agent denies OpenCode's `question` permission. Allow it for the agent you use with Devin. |
 | Devin's question shows as failed with "User canceled the question" | You dismissed the picker, typed a new message, or the answer timed out (`DEVIN_BRIDGE_QUESTION_TIMEOUT_MS`). `opencode run` cannot ask questions, so it always cancels them. |
 | `_The bridge could not complete the Devin turn: …_` | `devin acp` stopped. The next prompt starts it again and replays the conversation. Details are in `~/.cache/devin-acp-bridge/devin-acp.log`. |
+| Windows: a stale bridge or `devin acp` keeps running, or a console window opens | Windows support is untested. The plugin stops a stale bridge with `POST /v1/shutdown`, which also ends `devin acp`; a bridge from before this change can only be force-stopped, which leaves its `devin acp` running. End it in Task Manager. Report what you see in an issue. |
 
 ## Limitations
 

@@ -79,8 +79,28 @@ export async function health(port: number, fetchImpl: typeof fetch = fetch): Pro
   }
 }
 
+/**
+ * Asks a bridge to stop through `POST /v1/shutdown`. On Windows a signal cannot reach the bridge's shutdown
+ * handler, so this is the only clean stop there. False when the bridge did not accept the request.
+ */
+export async function requestShutdown(port: number, token: string, fetchImpl: typeof fetch = fetch): Promise<boolean> {
+  try {
+    const response = await fetchImpl(`http://127.0.0.1:${port}/v1/shutdown`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      redirect: "manual",
+      signal: AbortSignal.timeout(2000),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 export type EnsureOptions = {
   build: string;
+  /** The bridge token. Without it, a stale bridge is stopped with a signal only. */
+  token?: string;
   serverPath: string;
   execPath: string;
   statePath?: string;
@@ -127,9 +147,13 @@ export async function ensureBridge(options: EnsureOptions): Promise<BridgeState>
       if (recheck === "stale") {
         const stale = readState(statePath);
         if (stale) {
-          try {
-            kill(stale.pid);
-          } catch {}
+          // A bridge from before /v1/shutdown, or one with another token, rejects the request.
+          const accepted = options.token !== undefined && (await requestShutdown(stale.port, options.token, options.fetchImpl));
+          if (!accepted) {
+            try {
+              kill(stale.pid);
+            } catch {}
+          }
           while (Date.now() < deadline && (await health(stale.port, options.fetchImpl))) await Bun.sleep(POLL_MS);
         }
       }
@@ -154,6 +178,7 @@ function startBridge(options: EnsureOptions, statePath: string): void {
   const child = (options.spawn ?? nodeSpawn)(options.execPath, ["run", options.serverPath], {
     cwd: homedir(),
     detached: true,
+    windowsHide: true,
     stdio: ["ignore", log, log],
     env: {
       ...(options.env ?? process.env),

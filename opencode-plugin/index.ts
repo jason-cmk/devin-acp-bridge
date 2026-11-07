@@ -281,18 +281,19 @@ export default Plugin.define({
     const refresh = async () => {
       try {
         let nextBaseURL = externalBaseURL;
+        const token = resolveToken().value;
         if (!nextBaseURL) {
           // The suffix makes a bridge started with the other debug setting count as stale, so it is replaced.
           const build = buildId(join(repoRoot, "src"));
           const state = await ensureBridge({
             build: debugEnabled ? `${build}-debug` : build,
+            token,
             serverPath: join(repoRoot, "src", "server.ts"),
             execPath: process.execPath,
             env: debugEnabled ? { ...process.env, DEVIN_BRIDGE_DEBUG: "1" } : process.env,
           });
           nextBaseURL = `http://127.0.0.1:${state.port}/v1`;
         }
-        const token = resolveToken().value;
         const next = filterModels(await fetchModels(nextBaseURL, token), exclude);
         log("debug", `${ctx.location.directory}: ${next.length} models from ${nextBaseURL}`);
         if (nextBaseURL !== baseURL || JSON.stringify(next) !== JSON.stringify(models)) {

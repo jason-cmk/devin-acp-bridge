@@ -463,6 +463,11 @@ const server = Bun.serve({
       const card = cards.get(decodeURIComponent(url.pathname.slice("/v1/cards/".length)));
       return card ? Response.json(card) : errorResponse(404, "No card with this call ID.");
     }
+    if (request.method === "POST" && url.pathname === "/v1/shutdown") {
+      // Stop after this response goes out.
+      setTimeout(() => void shutdown(), 100);
+      return Response.json({ stopping: true, pid: process.pid });
+    }
     if (request.method === "POST" && url.pathname === "/v1/steer") {
       return steerResponse((await request.json().catch(() => null)) as { session?: unknown; text?: unknown } | null);
     }
@@ -482,13 +487,23 @@ const server = Bun.serve({
 
 if (statePath) writeState(statePath, { port: server.port ?? port, pid: process.pid, build });
 
-for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.on(signal, () => {
-    if (statePath) removeStateIfOwned(statePath, process.pid);
-    devin.stop();
-    process.exit(0);
-  });
+let stopping = false;
+
+/**
+ * The one stop path for signals and `POST /v1/shutdown`. It stops new connections so `/healthz` fails at once,
+ * and ends `devin acp` before the bridge exits (§11.27).
+ */
+async function shutdown(): Promise<void> {
+  if (stopping) return;
+  stopping = true;
+  if (statePath) removeStateIfOwned(statePath, process.pid);
+  void server.stop();
+  // Exit even if ending Devin hangs: bridge.json is gone, so nothing could reach this bridge again.
+  await Promise.race([devin.stop().catch(() => {}), Bun.sleep(3000)]);
+  process.exit(0);
 }
+
+for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => void shutdown());
 
 console.log(`devin-acp-bridge ${build} listening on http://127.0.0.1:${server.port}`);
 console.log(

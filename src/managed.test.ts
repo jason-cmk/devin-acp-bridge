@@ -3,7 +3,7 @@ import type { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { acquireLock, buildId, ensureBridge, readState, releaseLock, removeStateIfOwned, writeState } from "./managed";
+import { acquireLock, buildId, ensureBridge, readState, releaseLock, removeStateIfOwned, requestShutdown, writeState } from "./managed";
 
 let dir: string;
 beforeEach(() => {
@@ -59,14 +59,23 @@ describe("acquireLock", () => {
   });
 });
 
-type Fake = { healthy: Map<number, { pid: number; build: string }>; spawned: string[][]; killed: number[] };
+type Fake = {
+  healthy: Map<number, { pid: number; build: string }>;
+  spawned: string[][];
+  killed: number[];
+  /** Ports that accepted `POST /v1/shutdown`. Only ports in `shutdownPorts` accept it. */
+  shutDown: number[];
+  shutdownPorts: Set<number>;
+  windowsHide: boolean[];
+};
 
 function fakes(statePath: string, startPort = 5000): Fake & { spawn: typeof spawn; fetchImpl: typeof fetch; kill: (pid: number) => void } {
-  const fake: Fake = { healthy: new Map(), spawned: [], killed: [] };
+  const fake: Fake = { healthy: new Map(), spawned: [], killed: [], shutDown: [], shutdownPorts: new Set(), windowsHide: [] };
   let nextPort = startPort;
   return {
     ...fake,
-    spawn: ((command: string, args: string[], options: { env: Record<string, string> }) => {
+    spawn: ((command: string, args: string[], options: { env: Record<string, string>; windowsHide?: boolean }) => {
+      fake.windowsHide.push(options.windowsHide === true);
       fake.spawned.push([command, ...args, options.env.BUN_BE_BUN!, options.env.DEVIN_BRIDGE_BUILD!]);
       const port = nextPort++;
       const pid = 1000 + port;
@@ -74,8 +83,15 @@ function fakes(statePath: string, startPort = 5000): Fake & { spawn: typeof spaw
       writeState(statePath, { port, pid, build: options.env.DEVIN_BRIDGE_BUILD! });
       return { unref() {} };
     }) as unknown as typeof spawn,
-    fetchImpl: (async (url: string) => {
+    fetchImpl: (async (url: string, init?: RequestInit) => {
       const port = Number(new URL(url).port);
+      if (new URL(url).pathname === "/v1/shutdown") {
+        const authorized = new Headers(init?.headers).get("authorization") === "Bearer t1";
+        if (init?.method !== "POST" || !authorized || !fake.shutdownPorts.has(port) || !fake.healthy.has(port)) return new Response("no", { status: 401 });
+        fake.shutDown.push(port);
+        fake.healthy.delete(port);
+        return Response.json({ stopping: true });
+      }
       const body = fake.healthy.get(port);
       return body ? Response.json(body) : new Response("down", { status: 503 });
     }) as unknown as typeof fetch,
@@ -107,6 +123,7 @@ describe("ensureBridge", () => {
     const second = await ensureBridge(options(statePath, f));
     expect(second).toEqual(first);
     expect(f.spawned).toEqual([["/usr/local/bin/opencode", "run", "/repo/src/server.ts", "1", "b1"]]);
+    expect(f.windowsHide).toEqual([true]);
     expect(existsSync(join(dir, "bridge.lock"))).toBe(false);
   });
 
@@ -118,6 +135,27 @@ describe("ensureBridge", () => {
     expect(f.killed).toEqual([old.pid]);
     expect(current.build).toBe("new");
     expect(current.port).not.toBe(old.port);
+  });
+
+  test("asks a stale bridge to shut down before it uses a signal", async () => {
+    const statePath = join(dir, "bridge.json");
+    const f = fakes(statePath);
+    const old = await ensureBridge(options(statePath, f, "old"));
+    f.shutdownPorts.add(old.port);
+    const current = await ensureBridge({ ...options(statePath, f, "new"), token: "t1" });
+    expect(f.shutDown).toEqual([old.port]);
+    expect(f.killed).toEqual([]);
+    expect(current.build).toBe("new");
+  });
+
+  test("uses a signal when the stale bridge rejects the shutdown request", async () => {
+    const statePath = join(dir, "bridge.json");
+    const f = fakes(statePath);
+    const old = await ensureBridge(options(statePath, f, "old"));
+    const current = await ensureBridge({ ...options(statePath, f, "new"), token: "t1" });
+    expect(f.shutDown).toEqual([]);
+    expect(f.killed).toEqual([old.pid]);
+    expect(current.build).toBe("new");
   });
 
   test("starts a new bridge when the recorded one no longer answers", async () => {
@@ -148,5 +186,25 @@ describe("ensureBridge", () => {
     const broken = { ...options(statePath, f), timeoutMs: 500, spawn: (() => ({ unref() {} })) as unknown as typeof spawn };
     await expect(ensureBridge(broken)).rejects.toThrow(join(dir, "bridge.log"));
     expect(readFileSync(join(dir, "bridge.log"), "utf8")).toBe("");
+  });
+});
+
+describe("requestShutdown", () => {
+  test("sends the token and reports whether the bridge accepted", async () => {
+    const seen: Array<{ url: string; method?: string; auth: string | null }> = [];
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      seen.push({ url, method: init?.method, auth: new Headers(init?.headers).get("authorization") });
+      return new Response("", { status: url.includes(":1/") ? 200 : 401 });
+    }) as unknown as typeof fetch;
+    expect(await requestShutdown(1, "tok", fetchImpl)).toBe(true);
+    expect(await requestShutdown(2, "tok", fetchImpl)).toBe(false);
+    expect(seen[0]).toEqual({ url: "http://127.0.0.1:1/v1/shutdown", method: "POST", auth: "Bearer tok" });
+  });
+
+  test("is false when nothing answers", async () => {
+    const fetchImpl = (async () => {
+      throw new Error("connection refused");
+    }) as unknown as typeof fetch;
+    expect(await requestShutdown(1, "tok", fetchImpl)).toBe(false);
   });
 });
